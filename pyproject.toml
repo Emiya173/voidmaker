@@ -1,0 +1,46 @@
+[project]
+name = "voidmaker"
+version = "0.1.0"
+description = "桌面角色 AI 助手：角色包驱动、主动屏幕感知、Claude Agent SDK 内核"
+requires-python = ">=3.12"
+dependencies = [
+    "claude-agent-sdk>=0.1.0",
+    "PySide6>=6.8",
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "PyYAML>=6.0",
+    # 语音输入:CTranslate2 CPU 推理(int8),非 torch 栈;模型懒加载
+    "faster-whisper>=1.0",
+    "pillow>=12.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pytest>=8.0",
+    "pytest-asyncio",
+]
+
+[project.scripts]
+voidmaker = "voidmaker.__main__:main"
+
+# 本项目不直接依赖 torch:GPT-SoVITS 推理/训练在独立仓库
+# (~/dev/voice/talk/GPT-SoVITS) 的自有环境中运行,VoidMaker 仅通过 HTTP 调用其 TTS API。
+# 若将来需要在本项目内跑 ROCm torch,参考 ~/dev/michi-ocr 的 [tool.uv.sources] 写法:
+# torch 走 https://download.pytorch.org/whl/rocm6.4 索引 (gfx1201/RDNA4),
+# 并显式声明 pytorch-triton-rocm。
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/voidmaker"]
+
+[tool.ruff]
+line-length = 120
+src = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,17 @@
+# python / uv
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+dist/
+
+# nix
+result
+
+# 运行时数据
+data/
+
+# 角色包内容(立绘/语音为二创资产,不入库;只提交 schema 与 README)
+characters/*/
+!characters/README.md
