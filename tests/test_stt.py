@@ -1,6 +1,10 @@
 import struct
+import wave
 
-from voidmaker.voice.stt import BYTES_PER_CHUNK, CHUNK_MS, SpeechSegmenter
+import httpx
+
+from voidmaker.config import STTConfig
+from voidmaker.voice.stt import BYTES_PER_CHUNK, CHUNK_MS, SpeechSegmenter, Transcriber
 
 SILENCE = b"\x00\x00" * (BYTES_PER_CHUNK // 2)
 SPEECH = struct.pack("<h", 3000) * (BYTES_PER_CHUNK // 2)
@@ -45,3 +49,42 @@ def test_two_utterances_in_sequence():
     one = [SPEECH] * 20 + [SILENCE] * SILENCE_CHUNKS
     utterances = feed_all(seg, [SILENCE] * 20 + one + one)
     assert len(utterances) == 2
+
+
+def make_wav(path):
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(16000)
+        f.writeframes(SPEECH * 10)
+
+
+def test_transcribe_prefers_server(tmp_path, monkeypatch):
+    wav = tmp_path / "u.wav"
+    make_wav(wav)
+    seen = {}
+
+    def fake_post(url, **kwargs):
+        seen["url"] = url
+        seen["language"] = kwargs["data"].get("language")
+        return httpx.Response(200, json={"text": " 你好 "}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    t = Transcriber(STTConfig(server_url="http://127.0.0.1:9881"))
+    assert t.transcribe(wav) == "你好"
+    assert seen["url"] == "http://127.0.0.1:9881/inference"
+    assert seen["language"] == "zh"
+    assert t._model is None  # 本地模型未被加载
+
+
+def test_transcribe_falls_back_when_server_down(tmp_path, monkeypatch):
+    wav = tmp_path / "u.wav"
+    make_wav(wav)
+
+    def fake_post(url, **kwargs):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    t = Transcriber(STTConfig(server_url="http://127.0.0.1:9881"))
+    monkeypatch.setattr(t, "_transcribe_local", lambda p: "本地结果")
+    assert t.transcribe(wav) == "本地结果"

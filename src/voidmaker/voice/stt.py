@@ -2,6 +2,8 @@
 
 faster-whisper 走 CTranslate2 纯 CPU 推理(int8),不引入 torch/GPU 栈;
 模型懒加载(首次使用时自动从 HF 下载)。录音经 PipeWire,16k 单声道。
+配置 stt.server_url 时优先调 whisper.cpp HTTP 服务(~/dev/whisper-cpp,
+Vulkan/GPU),失败自动回退本地。
 
 连续对话用 StreamRecorder(raw PCM 流)+ SpeechSegmenter(能量 VAD 断句):
 噪声底自适应,静音超时切句,过短语音按噪声丢弃。
@@ -180,7 +182,8 @@ class SpeechSegmenter:
 
 
 class Transcriber:
-    """faster-whisper 转写(懒加载,首次调用较慢:下载+加载模型)。
+    """转写:server_url 配置时优先 whisper.cpp HTTP 服务(GPU),否则/失败时
+    进程内 faster-whisper(懒加载,首次调用较慢:下载+加载模型)。
 
     可在多个 worker 间共享(内部加锁),避免模型加载两份。
     """
@@ -191,6 +194,35 @@ class Transcriber:
         self._lock = threading.Lock()
 
     def transcribe(self, wav_path: Path) -> str:
+        if self._cfg.server_url:
+            text = self._transcribe_server(wav_path)
+            if text is not None:
+                return text
+        return self._transcribe_local(wav_path)
+
+    def _transcribe_server(self, wav_path: Path) -> str | None:
+        """whisper-server 的 /inference 契约:multipart 上传,JSON 回文本。
+        连接失败/超时/坏响应返回 None,由调用方回退本地。"""
+        import httpx
+
+        url = self._cfg.server_url.rstrip("/") + "/inference"
+        data = {"response_format": "json"}
+        if self._cfg.language:
+            data["language"] = self._cfg.language
+        try:
+            with wav_path.open("rb") as f:
+                resp = httpx.post(
+                    url,
+                    files={"file": (wav_path.name, f, "audio/wav")},
+                    data=data,
+                    timeout=30.0,
+                )
+            resp.raise_for_status()
+            return str(resp.json().get("text", "")).strip()
+        except (httpx.HTTPError, ValueError):
+            return None
+
+    def _transcribe_local(self, wav_path: Path) -> str:
         with self._lock:
             if self._model is None:
                 from faster_whisper import WhisperModel

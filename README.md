@@ -1,7 +1,7 @@
 # VoidMaker
 
 桌面角色 AI 助手:角色包驱动、主动屏幕感知、Claude Agent SDK 内核。
-参考项目:[Rvosy/sakura](https://github.com/Rvosy/sakura)(本地副本 `~/dev/sakura`),
+参考项目:[Rvosy/sakura](https://github.com/Rvosy/sakura),
 主要继承其角色包格式(`.char` / `character.json`)与分段双语回复协议;agent 内核与 UI 全部重写。
 
 ## 快速开始(NixOS)
@@ -15,6 +15,8 @@ pytest             # 跑测试
 依赖 Claude Code CLI 已登录(Claude Agent SDK 通过它驱动 agent loop)。
 
 ## 部署
+
+以个人桌面环境(NixOS + niri)举例，实际应该没有硬性的发行版要求.
 
 **前置**:NixOS + niri/Wayland;Claude Code CLI 已登录;可选 GPT-SoVITS(TTS,
 见下)、麦克风(语音输入)。可复现性:`flake.lock` 钉死 nixpkgs、`uv.lock` 锁定
@@ -51,6 +53,7 @@ Python 依赖,`nix develop` 重建即可(需联网拉 wheel)。
 ```kdl
 window-rule {
     match app-id="voidmaker"
+    excludes title="VoidMaker 记事本"
     open-floating true
     default-floating-position x=32 y=32 relative-to="bottom-right"
     // 以下覆盖全局装饰(dms 等预设的圆角/阴影/边框会给透明窗口描出实心卡片感)
@@ -124,12 +127,30 @@ tts:
 
 ## 语音输入与连续对话
 
-语音输入走 pw-record + faster-whisper(CPU int8,懒加载)。两种用法:
+语音输入走 pw-record + faster-whisper(CPU int8,懒加载),开箱即用、零配置。
+两种用法:
 
 - **单次**:点 🎤 开始/结束录音,识别结果填入输入条供确认。
 - **连续对话**:右键菜单勾选"语音连续对话"(或 `VOIDMAKER_VOICE_CHAT=1` 启动),
   持续拾音、能量 VAD 自动断句、识别后直接发送;她说话/思考期间自动暂停拾音
   (半双工,防自回授),空闲后恢复。点 🎤(👂)退出该模式。
+
+### 可选:whisper.cpp GPU 服务
+
+与 TTS 同一模式:转写服务独立运行,本项目只发 HTTP。faster-whisper 的 GPU 端
+只支持 CUDA,AMD 卡走 whisper.cpp 的 Vulkan 后端(nixpkgs 包
+`whisper-cpp.override { vulkanSupport = true; }`,经 RADV 不依赖 ROCm),
+能跑更大的模型换更高的中文准确率(实测 RX 9070 + large-v3-turbo,
+十几秒音频 0.2s 出结果,约为 CPU small 的 10 倍)。
+
+```sh
+whisper-server -m models/ggml-large-v3-turbo-q5_0.bin --host 127.0.0.1 --port 9881
+```
+
+```yaml
+stt:
+  server_url: http://127.0.0.1:9881   # 不设或服务不在线 → 自动回退进程内 CPU 转写
+```
 
 ## 家庭服务器状态(可选)
 

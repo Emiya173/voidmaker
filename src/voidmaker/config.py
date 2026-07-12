@@ -52,11 +52,16 @@ class HomelabConfig(BaseModel):
 
 
 class STTConfig(BaseModel):
-    """语音输入(faster-whisper CPU,进程内;模型懒加载)。"""
+    """语音输入(faster-whisper CPU,进程内;模型懒加载)。
+
+    server_url 指向 whisper.cpp 服务(~/dev/whisper-cpp,Vulkan/GPU)时优先走
+    HTTP,服务不在线自动回退进程内 faster-whisper。
+    """
 
     enabled: bool = True
     model: str = "small"  # tiny/base/small/medium
     language: str | None = "zh"  # None = 自动检测
+    server_url: str | None = None  # 如 http://127.0.0.1:9881;None = 仅本地
 
 
 class AppConfig(BaseModel):
