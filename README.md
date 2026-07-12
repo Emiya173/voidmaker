@@ -24,13 +24,20 @@ Python 依赖,`nix develop` 重建即可(需联网拉 wheel)。
 
 1. **获取与环境**
    ```sh
-   git clone <repo-url> voidmaker && cd voidmaker
+   git clone https://github.com/Emiya173/voidmaker && cd voidmaker
    nix develop        # 自动 uv sync 到 .venv 并激活
    ```
 
-2. **角色包**:把角色放到 `characters/<id>/`(`character.json` + 立绘/语音)。
-   立绘/语音是二创资产,**不入库、需自备**(格式见 `characters/README.md`)。
-   没有角色包也能跑,显示占位立绘。
+2. **角色包与图标**:立绘/语音是二创资产,**不入库**(格式见
+   `characters/README.md`);没有角色包也能跑,显示占位立绘。
+   [Release](https://github.com/Emiya173/voidmaker/releases) 附件提供打包好的
+   资产 `voidmaker-assets-<日期>.tar.zst`(含 sakura 角色包 + 立绘版图标,
+   附 sha256),一键装好:
+   ```sh
+   mkdir -p /tmp/voidmaker-assets
+   tar --zstd -xf voidmaker-assets-*.tar.zst -C /tmp/voidmaker-assets
+   /tmp/voidmaker-assets/install.sh ~/dev/voidmaker   # 参数 = 仓库路径
+   ```
 
 3. **配置(均可选,不建文件用默认值)**:`~/.config/voidmaker/config.toml`——
    全部字段带注释的模板见 `docs/config.example.toml`,TTS / 语音输入 / 家庭服务器
@@ -39,12 +46,14 @@ Python 依赖,`nix develop` 重建即可(需联网拉 wheel)。
 
 4. **运行**
    ```sh
-   python -m voidmaker          # 桌宠 UI(默认)
-   python -m voidmaker --cli    # 终端对话
-   python -m voidmaker --admin  # 本地管理后台
+   python -m voidmaker             # 桌宠 UI(默认)
+   python -m voidmaker --services  # 先拉起 TTS/STT 服务再启动(见「随桌宠拉起服务」)
+   python -m voidmaker --cli       # 终端对话
+   python -m voidmaker --admin     # 本地管理后台
    ```
 
-5. **niri 集成**:窗口定位靠 window-rule、启停靠快捷键 binds——见下一节。
+5. **niri 集成**:窗口定位靠 window-rule、启停靠快捷键 binds——见下一节;
+   工作区图标/托盘见「桌面集成」。
 
 ## niri 配置
 

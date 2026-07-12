@@ -3,7 +3,7 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
-  outputs = { self, nixpkgs }:
+  outputs = { nixpkgs, ... }:
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
@@ -63,7 +63,11 @@
           fi
           . "$UV_PROJECT_ENVIRONMENT/bin/activate"
 
-          echo "VoidMaker dev shell ready. Run: python -m voidmaker --cli"
+          echo "VoidMaker dev shell ready."
+          echo "  桌宠 UI:    python -m voidmaker            (--services 先拉起 TTS/STT)"
+          echo "  终端对话:   python -m voidmaker --cli"
+          echo "  管理后台:   python -m voidmaker --admin"
+          echo "  测试/lint:  pytest / ruff check src tests"
         '';
       };
     };
