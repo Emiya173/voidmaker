@@ -114,7 +114,17 @@ def main() -> None:
     parser.add_argument("--cli", action="store_true", help="终端对话原型(不启动 UI)")
     parser.add_argument("--admin", action="store_true", help="启动本地管理后台(设置/日志/记忆/权限)")
     parser.add_argument("--quit", action="store_true", help="退出正在运行的桌宠实例(快捷键释放用)")
+    parser.add_argument(
+        "--services", action="store_true",
+        help="启动前拉起未在线的 TTS/STT 服务(需在 config.toml 配 start_command)",
+    )
     args = parser.parse_args()
+
+    if args.services and not args.quit:
+        from .services import start_services
+
+        for name in start_services(load_config()):
+            print(f"[voidmaker] 已拉起 {name} 服务(后台预热,就绪前自动降级)", flush=True)
 
     if args.quit:
         # 纯 socket,无需起 Qt:给运行中的实例发一条 quit
