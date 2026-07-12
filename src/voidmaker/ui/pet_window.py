@@ -1,7 +1,8 @@
 """桌宠主窗口:单一顶层窗口,垂直组装 气泡区 + 立绘 + 输入条。
 
 Wayland 下独立顶层窗口之间无法相对定位,因此不采用 sakura 的多窗口方案。
-窗口尺寸固定(气泡区预留高度),避免尺寸变化导致 niri 浮动锚点漂移。
+顶边尺寸固定(气泡区预留高度)——niri 锚定顶左,顶边伸缩会推动立绘
+(mask 抠输入区域 niri 实测不穿透,已放弃);输入条在底边,可随焦点真伸缩。
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import os
 import time
 from collections import deque
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QAction, QMouseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -72,6 +73,14 @@ class PetWindow(QWidget):
         theme = card.theme if card else {}
         self._bubble = BubbleLabel(theme, self)
         self._bubble.finished.connect(self._on_bubble_finished)
+
+        # 气泡开关(false = 纯语音/立绘);整轮播完后气泡停留一段时间再收起
+        # (0 = 常显),新内容到来即取消
+        self._bubble_enabled = cfg.ui.bubble_enabled
+        self._bubble_hide_ms = int(max(cfg.ui.bubble_hide_seconds, 0) * 1000)
+        self._bubble_hide_timer = QTimer(self)
+        self._bubble_hide_timer.setSingleShot(True)
+        self._bubble_hide_timer.timeout.connect(self._bubble.hide)
 
         self._portrait = PortraitWidget(card, self)
 
@@ -145,15 +154,17 @@ class PetWindow(QWidget):
         self._perm_current = None
 
         # 布局:气泡区固定高度(底部对齐),立绘,输入条
-        bubble_area = QWidget(self)
-        bubble_area.setFixedHeight(BUBBLE_AREA_HEIGHT)
-        bubble_layout = QVBoxLayout(bubble_area)
+        self._bubble_area = QWidget(self)
+        self._bubble_area.setFixedHeight(BUBBLE_AREA_HEIGHT)
+        bubble_layout = QVBoxLayout(self._bubble_area)
         bubble_layout.setContentsMargins(0, 0, 0, 6)
         bubble_layout.addStretch(1)
         bubble_layout.addWidget(self._bubble)
         bubble_layout.addWidget(self._perm_bubble)
 
-        input_row = QHBoxLayout()
+        self._input_bar = QWidget(self)
+        input_row = QHBoxLayout(self._input_bar)
+        input_row.setContentsMargins(0, 0, 0, 0)
         input_row.setSpacing(6)
         input_row.addWidget(self._input, stretch=1)
         input_row.addWidget(self._snip_btn)
@@ -163,10 +174,20 @@ class PetWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
-        layout.addWidget(bubble_area)
+        layout.addWidget(self._bubble_area)
         layout.addWidget(self._portrait, alignment=Qt.AlignmentFlag.AlignHCenter)
-        layout.addLayout(input_row)
+        layout.addWidget(self._input_bar)
         self.setFixedSize(self.sizeHint())
+
+        # 输入条仅窗口聚焦时显示(见 changeEvent);隐藏时窗口整体收缩,
+        # 不留透明占位(输入条在底边,顶左锚定下立绘位置不受影响)
+        self._input_focus_only = cfg.ui.input_focus_only
+        if self._input_focus_only:
+            self._set_input_bar_visible(False)
+        if not self._bubble_enabled:
+            # 关字幕:窗口不含气泡区,立绘上方无窗口、天然穿透;
+            # 权限请示时临时展开(见 _show_next_permission)
+            self._set_bubble_area_visible(False)
 
         homelab_url = cfg.homelab.hub_url if cfg.homelab.enabled else None
         self._worker = AgentWorker(
@@ -291,9 +312,11 @@ class PetWindow(QWidget):
         template, variant = choice
         print(f"[voidmaker] 接话: [{template.intent}] {variant.zh or variant.ja}", flush=True)
         # 临时段:只走字幕/立绘轻量路径,不进历史、语音队列或分段状态机
+        self._bubble_hide_timer.stop()
         self._portrait.set_portrait_for(template.portrait, template.tone)
         self._portrait.pulse()
-        self._bubble.start(variant.zh or variant.ja)
+        if self._bubble_enabled:
+            self._bubble.start(variant.zh or variant.ja)
 
     def _on_segment(self, seg: ReplySegment) -> None:
         self._bc_timer.stop()
@@ -449,9 +472,13 @@ class PetWindow(QWidget):
     def _show_next_permission(self) -> None:
         if not self._perm_queue:
             self._perm_current = None
+            if not self._bubble_enabled:
+                self._set_bubble_area_visible(False)  # 请示完毕,收回临时展开的气泡区
             return
         self._pause_listening()
         self._bubble.hide()  # 与字幕互斥,避免叠加
+        if not self._bubble_enabled:
+            self._set_bubble_area_visible(True)  # 关字幕模式:请示期间临时展开
         self._perm_current = request = self._perm_queue.popleft()
         name = request.tool_name.rsplit("__", 1)[-1]  # mcp__pet__open_url → open_url
         detail = json.dumps(request.tool_input, ensure_ascii=False)
@@ -482,6 +509,7 @@ class PetWindow(QWidget):
 
     def _enqueue(self, seg: ReplySegment) -> None:
         self._pause_listening()  # 提醒/主动发言等不经 _send_text 的路径也要停拾音
+        self._bubble_hide_timer.stop()  # 新回复来了,取消上一轮的收起倒计时
         seq = self._seq_counter
         self._seq_counter += 1
         # 立即送合成(流水线):显示到该段时音频多半已就绪
@@ -498,6 +526,8 @@ class PetWindow(QWidget):
         """开始队首分段;音频未就绪则挂起等 audio_ready。"""
         if not self._segments:
             self._showing = False
+            if self._bubble_hide_ms:
+                self._bubble_hide_timer.start(self._bubble_hide_ms)  # 停留后收起气泡
             self._maybe_resume_listening()  # 分段播完,空闲期恢复拾音
             return
         seq, seg = self._segments[0]
@@ -507,13 +537,16 @@ class PetWindow(QWidget):
         self._segments.popleft()
         self._waiting_seq = None
         has_audio = self._audio_state.pop(seq)
-        self._bubble_done = False
+        self._bubble_done = not self._bubble_enabled  # 关字幕:段推进只看语音
         self._audio_playing = has_audio
         self._portrait.set_portrait_for(seg.portrait, seg.tone)
         self._portrait.pulse()  # 开口轻顶,把动作和这段回复绑定
         if has_audio:
             self._voice.play(seq)
-        self._bubble.start(seg.zh or seg.ja)
+        if self._bubble_enabled:
+            self._bubble.start(seg.zh or seg.ja)
+        elif not has_audio:
+            QTimer.singleShot(0, self._maybe_advance)  # 无字幕也无语音,直接推进
 
     def _on_audio_ready(self, seq: int, ok: bool) -> None:
         self._audio_state[seq] = ok
@@ -571,6 +604,30 @@ class PetWindow(QWidget):
         quit_action.triggered.connect(self.close)
         menu.addAction(quit_action)
         menu.exec(event.globalPos())
+
+    def _refit_window(self) -> None:
+        # 显隐事件对布局的标脏是异步的:先显式 invalidate 再取 sizeHint,
+        # 否则拿到缓存旧值,setFixedSize 原地踏步
+        self.layout().invalidate()
+        self.setFixedSize(self.layout().sizeHint())
+
+    def _set_input_bar_visible(self, visible: bool) -> None:
+        if visible == self._input_bar.isVisibleTo(self):
+            return
+        self._input_bar.setVisible(visible)
+        self._refit_window()
+
+    def _set_bubble_area_visible(self, visible: bool) -> None:
+        if visible == self._bubble_area.isVisibleTo(self):
+            return
+        self._bubble_area.setVisible(visible)
+        self._refit_window()
+
+    def changeEvent(self, event) -> None:
+        # 输入条随窗口焦点显隐(niri 点击窗口即聚焦,点别处即失焦)
+        if event.type() == QEvent.Type.ActivationChange and self._input_focus_only:
+            self._set_input_bar_visible(self.isActiveWindow())
+        super().changeEvent(event)
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Escape:

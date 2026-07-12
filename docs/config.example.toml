@@ -12,6 +12,12 @@
 # model = "claude-sonnet-5"       # 主对话模型;"" = 用 Claude Code CLI 的默认模型
 # max_turns = 30                  # 单次回复的最大 agent 轮数;默认不限制
 
+[ui]
+# bubble_enabled = true           # 显示字幕气泡;false = 纯语音/立绘,窗口不含气泡区,
+                                  #   立绘上方点击穿透(权限请示时临时展开)
+# bubble_hide_seconds = 5.0       # 整轮回复播完(TTS/字幕结束)后气泡停留秒数;0 = 一直显示
+# input_focus_only = true         # 输入条只在窗口获得焦点时显示(点桌宠即聚焦);false = 常显
+
 [tts]                             # 语音合成:GPT-SoVITS 独立服务,只发 HTTP(见 README)
 # enabled = false
 # api_url = "http://127.0.0.1:9880/tts"

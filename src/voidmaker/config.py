@@ -78,8 +78,21 @@ class STTConfig(SectionModel):
     start_command: str | None = None
 
 
+class UIConfig(SectionModel):
+    """桌宠窗口行为。"""
+
+    # 显示字幕气泡;false = 纯语音/立绘,且窗口不含气泡区——立绘上方无窗口、
+    # 点击天然穿透(权限请示时气泡区临时展开,答完收回)
+    bubble_enabled: bool = True
+    # 整轮回复播完(TTS 播放/字幕都结束)后气泡再停留的秒数;0 = 一直显示
+    bubble_hide_seconds: float = 5.0
+    # 输入条只在窗口获得焦点时显示(点桌宠即聚焦);false = 常显
+    input_focus_only: bool = True
+
+
 class AppConfig(SectionModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
     screen_awareness: ScreenAwarenessConfig = Field(default_factory=ScreenAwarenessConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
