@@ -77,6 +77,20 @@ def test_transcribe_prefers_server(tmp_path, monkeypatch):
     assert t._model is None  # 本地模型未被加载
 
 
+def test_transcribe_normalizes_to_simplified(tmp_path, monkeypatch):
+    wav = tmp_path / "u.wav"
+    make_wav(wav)
+
+    def fake_post(url, **kwargs):
+        return httpx.Response(
+            200, json={"text": "今天天氣不錯,語音識別"}, request=httpx.Request("POST", url)
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    t = Transcriber(STTConfig(server_url="http://127.0.0.1:9881"))
+    assert t.transcribe(wav) == "今天天气不错,语音识别"
+
+
 def test_transcribe_falls_back_when_server_down(tmp_path, monkeypatch):
     wav = tmp_path / "u.wav"
     make_wav(wav)

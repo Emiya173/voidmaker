@@ -8,10 +8,10 @@ dependencies = [
     "PySide6>=6.8",
     "httpx>=0.27",
     "pydantic>=2.7",
-    "PyYAML>=6.0",
     # 语音输入:CTranslate2 CPU 推理(int8),非 torch 栈;模型懒加载
     "faster-whisper>=1.0",
     "pillow>=12.3.0",
+    "zhconv>=1.4.3",
 ]
 
 [project.optional-dependencies]

@@ -194,11 +194,17 @@ class Transcriber:
         self._lock = threading.Lock()
 
     def transcribe(self, wav_path: Path) -> str:
+        text = None
         if self._cfg.server_url:
             text = self._transcribe_server(wav_path)
-            if text is not None:
-                return text
-        return self._transcribe_local(wav_path)
+        if text is None:
+            text = self._transcribe_local(wav_path)
+        # Whisper 输出繁简不定,中文统一归一化为简体
+        if self._cfg.language == "zh" and text:
+            from zhconv import convert
+
+            text = convert(text, "zh-cn")
+        return text
 
     def _transcribe_server(self, wav_path: Path) -> str | None:
         """whisper-server 的 /inference 契约:multipart 上传,JSON 回文本。
