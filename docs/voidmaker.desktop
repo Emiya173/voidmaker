@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=VoidMaker
+Comment=桌面角色 AI 助手
+# 按自己的启动方式改,例如:
+#   sh -c 'cd ~/dev/VoidMaker && nix develop -c python -m voidmaker --services'
+Exec=voidmaker
+Icon=voidmaker
+Terminal=false
+Categories=Utility;
+StartupWMClass=voidmaker

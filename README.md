@@ -101,6 +101,26 @@ window-rule {
 }
 ```
 
+## 桌面集成(工作区图标与系统托盘)
+
+Wayland 下窗口图标由桌面按 app-id(`voidmaker`)解析同名 desktop entry 得到,
+装一次即可让 niri overview / 任务切换器显示图标:
+
+```sh
+mkdir -p ~/.local/share/icons/hicolor/scalable/apps
+cp src/voidmaker/assets/voidmaker.svg ~/.local/share/icons/hicolor/scalable/apps/
+cp docs/voidmaker.desktop ~/.local/share/applications/   # Exec 按注释改成自己的启动方式
+```
+
+想用自定义图标(如角色立绘版):PNG 放 `src/voidmaker/assets/voidmaker.png`
+(窗口/启动器)和 `src/voidmaker/assets/tray/<尺寸>.png`(托盘,16-32px 各档),
+存在即优先于内置 SVG;主题侧把各尺寸装进
+`~/.local/share/icons/hicolor/<尺寸>x<尺寸>/apps/voidmaker.png`。二创图片不入 git。
+
+系统托盘(StatusNotifier)随桌宠自动出现:左键单击切换显隐,右键菜单含
+显隐/自动允许工具/语音连续对话/退出。需要 bar 提供托盘宿主(dms、waybar 的
+`tray` 模块等);没有宿主时自动跳过,仅打一行日志。
+
 ## TTS(GPT-SoVITS)
 
 推理/训练在独立仓库运行(当前:`~/dev/gpt-sovits`,ROCm/9070XT),

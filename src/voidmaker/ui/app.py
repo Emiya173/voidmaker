@@ -12,6 +12,7 @@ from ..character.loader import scan_characters
 from ..config import AppConfig
 from .ipc import ControlServer, send_ctl
 from .pet_window import PetWindow
+from .tray import app_icon, create_tray
 
 
 def run_app(cfg: AppConfig) -> int:
@@ -24,6 +25,8 @@ def run_app(cfg: AppConfig) -> int:
     QGuiApplication.setDesktopFileName("voidmaker")
     app = QApplication(sys.argv)
     app.setApplicationName("voidmaker")
+    # 托盘/任务切换用;niri overview 的工作区图标另需 desktop entry(README「桌面集成」)
+    app.setWindowIcon(app_icon())
 
     # 单例:已有实例在跑 → 让启动快捷键变成「收起/唤出」开关,自己退出。
     if send_ctl("toggle"):
@@ -40,6 +43,7 @@ def run_app(cfg: AppConfig) -> int:
 
     window = PetWindow(card, cfg)
     window.show()
+    tray = create_tray(window)  # noqa: F841 — 持有引用防回收;无宿主时为 None
 
     # 控制通道:接收后续启动/退出快捷键发来的命令。
     def _on_command(cmd: str) -> None:

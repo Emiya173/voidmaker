@@ -15,3 +15,8 @@ data/
 # 角色包内容(立绘/语音为二创资产,不入库;只提交 schema 与 README)
 characters/*/
 !characters/README.md
+
+# 角色立绘版图标(二创资产;公开仓库回退内置 SVG)
+icons/
+src/voidmaker/assets/*.png
+src/voidmaker/assets/tray/

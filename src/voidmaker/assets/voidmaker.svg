@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- VoidMaker:虚空圆 + 樱花瓣(夜乃桜)。托盘 22px 下需保持可辨,别加细节。 -->
+  <defs>
+    <radialGradient id="void" cx="36%" cy="32%" r="80%">
+      <stop offset="0%" stop-color="#3d3d6b"/>
+      <stop offset="70%" stop-color="#1c1c34"/>
+      <stop offset="100%" stop-color="#121222"/>
+    </radialGradient>
+  </defs>
+  <circle cx="32" cy="32" r="29" fill="url(#void)" stroke="#7d7dc8" stroke-width="2"/>
+  <path d="M32 15 C 38.5 21.5 44 28 44 35.5 C 44 43 38.5 48 32 48
+           C 25.5 48 20 43 20 35.5 C 20 28 25.5 21.5 32 15 Z" fill="#f0aecb"/>
+  <path d="M32 15 C 33.6 17 35.2 19 36.4 21.2 L 32 19.4 L 27.6 21.2
+           C 28.8 19 30.4 17 32 15 Z" fill="#1c1c34"/>
+</svg>
