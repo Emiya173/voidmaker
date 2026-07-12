@@ -1,18 +1,28 @@
-"""运行配置:~/.config/voidmaker/config.yaml,环境变量优先。"""
+"""运行配置:~/.config/voidmaker/config.toml,环境变量优先。"""
 
 from __future__ import annotations
 
 import os
+import sys
+import tomllib
 from pathlib import Path
 
-import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-CONFIG_PATH = Path(os.environ.get("VOIDMAKER_CONFIG", "~/.config/voidmaker/config.yaml")).expanduser()
+CONFIG_PATH = Path(os.environ.get("VOIDMAKER_CONFIG", "~/.config/voidmaker/config.toml")).expanduser()
 DATA_DIR = Path(os.environ.get("VOIDMAKER_DATA", "~/.local/share/voidmaker")).expanduser()
 
 
-class TTSConfig(BaseModel):
+class SectionModel(BaseModel):
+    """TOML 无 null:空字符串 "" 一律视为 None(如 agent.model = "" 表示用 CLI 默认)。"""
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _empty_str_is_none(cls, v):
+        return None if v == "" else v
+
+
+class TTSConfig(SectionModel):
     enabled: bool = False
     # 本机 GPT-SoVITS API(~/dev/gpt-sovits);迁移到其他机器时只改这里
     api_url: str = "http://127.0.0.1:9880/tts"
@@ -20,16 +30,18 @@ class TTSConfig(BaseModel):
     streaming: bool = True
     # 直接透传给 GPT-SoVITS /tts 的默认参数(ref_audio_path、text_lang 等)
     params: dict = Field(default_factory=dict)
+    # --services 拉起用的启动命令(服务不在线时经 sh 执行;含个人路径,只写 config.toml)
+    start_command: str | None = None
 
 
-class AgentConfig(BaseModel):
+class AgentConfig(SectionModel):
     # 主对话模型;None = 用 Claude Code CLI 的默认模型,也可写 "claude-opus-4-8" 等
     # (主动感知预判/记忆整理另有各自的廉价模型,见 screen_awareness.precheck_model)
     model: str | None = "claude-sonnet-5"
     max_turns: int | None = None
 
 
-class ScreenAwarenessConfig(BaseModel):
+class ScreenAwarenessConfig(SectionModel):
     """主动屏幕感知:周期截屏自判是否开口。默认关闭。"""
 
     enabled: bool = False
@@ -40,18 +52,18 @@ class ScreenAwarenessConfig(BaseModel):
     precheck_model: str | None = "claude-haiku-4-5"
 
 
-class HomelabConfig(BaseModel):
+class HomelabConfig(SectionModel):
     """家庭服务器状态查询(homelab-hub 聚合层,只读)。迁移/换网只改 hub_url。
 
-    默认关闭:hub_url 是用户自己的内网地址,填在 ~/.config/voidmaker/config.yaml,
+    默认关闭:hub_url 是用户自己的内网地址,填在 ~/.config/voidmaker/config.toml,
     不硬编码进代码。
     """
 
     enabled: bool = False
-    hub_url: str = "http://127.0.0.1:9201"  # 占位;真实内网地址由 config.yaml 覆盖
+    hub_url: str = "http://127.0.0.1:9201"  # 占位;真实内网地址由 config.toml 覆盖
 
 
-class STTConfig(BaseModel):
+class STTConfig(SectionModel):
     """语音输入(faster-whisper CPU,进程内;模型懒加载)。
 
     server_url 指向 whisper.cpp 服务(~/dev/whisper-cpp,Vulkan/GPU)时优先走
@@ -62,9 +74,11 @@ class STTConfig(BaseModel):
     model: str = "small"  # tiny/base/small/medium
     language: str | None = "zh"  # None = 自动检测
     server_url: str | None = None  # 如 http://127.0.0.1:9881;None = 仅本地
+    # --services 拉起用的启动命令(服务不在线时经 sh 执行;含个人路径,只写 config.toml)
+    start_command: str | None = None
 
 
-class AppConfig(BaseModel):
+class AppConfig(SectionModel):
     agent: AgentConfig = Field(default_factory=AgentConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
     screen_awareness: ScreenAwarenessConfig = Field(default_factory=ScreenAwarenessConfig)
@@ -76,9 +90,12 @@ class AppConfig(BaseModel):
 
 def load_config() -> AppConfig:
     if CONFIG_PATH.exists():
-        raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+        raw = tomllib.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         cfg = AppConfig.model_validate(raw)
     else:
+        legacy = CONFIG_PATH.with_name("config.yaml")
+        if legacy.exists():
+            print(f"[voidmaker] 配置已改用 TOML:请把 {legacy} 转写为 {CONFIG_PATH}", file=sys.stderr)
         cfg = AppConfig()
     # 快捷开关:VOIDMAKER_TTS=1/0 覆盖配置(便于临时验证)
     tts_env = os.environ.get("VOIDMAKER_TTS")

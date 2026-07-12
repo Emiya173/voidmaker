@@ -6,12 +6,12 @@
 本文件是**个人基础设施信息**(内网地址、主机名、服务清单),`~/.config/voidmaker/`
 下的真实版**不入代码库**——仓库里只留这份占位示例。
 
-同时在 `~/.config/voidmaker/config.yaml` 配置 hub 聚合层地址:
+同时在 `~/.config/voidmaker/config.toml` 配置 hub 聚合层地址:
 
-```yaml
-homelab:
-  enabled: true
-  hub_url: http://<你的内网主机>:<端口>   # homelab-hub 的 /rk 聚合端点
+```toml
+[homelab]
+enabled = true
+hub_url = "http://<你的内网主机>:<端口>"   # homelab-hub 的 /rk 聚合端点
 ```
 
 ---

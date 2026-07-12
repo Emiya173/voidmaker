@@ -32,10 +32,10 @@ Python 依赖,`nix develop` 重建即可(需联网拉 wheel)。
    立绘/语音是二创资产,**不入库、需自备**(格式见 `characters/README.md`)。
    没有角色包也能跑,显示占位立绘。
 
-3. **配置(均可选,不建文件用默认值)**:`~/.config/voidmaker/config.yaml`——
-   TTS / 语音输入 / 家庭服务器各节见下文对应章节;homelab 拓扑参考放
-   `~/.config/voidmaker/homelab.md`(模板 `docs/homelab.example.md`)。
-   这些含个人地址/资产的文件都在仓库外,不进 git。
+3. **配置(均可选,不建文件用默认值)**:`~/.config/voidmaker/config.toml`——
+   全部字段带注释的模板见 `docs/config.example.toml`,TTS / 语音输入 / 家庭服务器
+   各节另见下文对应章节;homelab 拓扑参考放 `~/.config/voidmaker/homelab.md`
+   (模板 `docs/homelab.example.md`)。这些含个人地址/资产的文件都在仓库外,不进 git。
 
 4. **运行**
    ```sh
@@ -111,16 +111,17 @@ cd ~/dev/gpt-sovits && nix develop --command \
   python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
 ```
 
-在 `~/.config/voidmaker/config.yaml` 配置:
+在 `~/.config/voidmaker/config.toml` 配置:
 
-```yaml
-tts:
-  enabled: true
-  api_url: http://127.0.0.1:9880/tts
-  params:
-    text_lang: ja
-    ref_audio_path: /path/to/ref.wav
-    prompt_lang: ja
+```toml
+[tts]
+enabled = true
+api_url = "http://127.0.0.1:9880/tts"
+
+[tts.params]
+text_lang = "ja"
+ref_audio_path = "/path/to/ref.wav"
+prompt_lang = "ja"
 ```
 
 将来迁移到其他推理机器时只需改 `api_url`。
@@ -147,20 +148,39 @@ tts:
 whisper-server -m models/ggml-large-v3-turbo-q5_0.bin --host 127.0.0.1 --port 9881
 ```
 
-```yaml
-stt:
-  server_url: http://127.0.0.1:9881   # 不设或服务不在线 → 自动回退进程内 CPU 转写
+```toml
+[stt]
+server_url = "http://127.0.0.1:9881"   # 不设或服务不在线 → 自动回退进程内 CPU 转写
 ```
+
+### 可选:随桌宠拉起服务
+
+懒得手动开两个服务的话,给 TTS/STT 配上启动命令,用 `--services` 启动:
+
+```toml
+[tts]
+start_command = "cd ~/dev/gpt-sovits && nix develop --command python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml"
+
+[stt]
+start_command = "cd ~/dev/whisper-cpp && nix develop -c ./serve.sh"
+```
+
+```sh
+python -m voidmaker --services   # 探测端口,没在线的才拉起;拉起后不等就绪
+```
+
+服务 detached 运行、退出桌宠不回收(冷启动贵,留给下次);预热期间 TTS 静默、
+STT 走 CPU 回退。服务日志在 `~/.local/state/voidmaker/<name>-server.log`。
 
 ## 家庭服务器状态(可选)
 
 若在家庭网络内、且部署了 homelab-hub 聚合层,她能查家里服务器的实时状态
-(Jellyfin/相册/下载/追番)。在 `~/.config/voidmaker/config.yaml` 配置:
+(Jellyfin/相册/下载/追番)。在 `~/.config/voidmaker/config.toml` 配置:
 
-```yaml
-homelab:
-  enabled: true                          # 不在家里的网络就设 false
-  hub_url: http://<你的内网主机>:<端口>   # homelab-hub /rk 端点(只读,无鉴权)
+```toml
+[homelab]
+enabled = true                            # 不在家里的网络就设 false
+hub_url = "http://<你的内网主机>:<端口>"   # homelab-hub /rk 端点(只读,无鉴权)
 ```
 
 拓扑参考(角色回答「家里网络怎么连的/某服务网址」用)放本地文件

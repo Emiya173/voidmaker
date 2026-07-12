@@ -1,0 +1,44 @@
+# VoidMaker 配置模板 —— 复制到 ~/.config/voidmaker/config.toml 按需修改。
+#
+# 所有字段均可省略,省略即用本文件标注的默认值(权威定义:src/voidmaker/config.py)。
+# 约定:TOML 没有 null,把字段设为空字符串 "" 等价于 None(用途见各字段注释)。
+# 环境变量 VOIDMAKER_CONFIG 可覆盖配置文件路径。
+
+# —— 顶层字段(TOML 语法要求:必须写在第一个 [节] 之前)——
+# characters_dir = "characters"   # 角色包目录
+# current_character = "Sakura"    # 启动角色 id;"" = 取扫描到的第一个
+
+[agent]
+# model = "claude-sonnet-5"       # 主对话模型;"" = 用 Claude Code CLI 的默认模型
+# max_turns = 30                  # 单次回复的最大 agent 轮数;默认不限制
+
+[tts]                             # 语音合成:GPT-SoVITS 独立服务,只发 HTTP(见 README)
+# enabled = false
+# api_url = "http://127.0.0.1:9880/tts"
+# streaming = true                # 段内流式:边合成边播放;排查问题时设 false 回整段合成
+# start_command = "cd ~/dev/gpt-sovits && nix develop --command python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml"
+                                  # ↑ --services 启动参数拉起服务用;含个人路径,只写在本机配置
+
+[tts.params]                      # 原样透传给 GPT-SoVITS /tts 的默认参数,可写任意字段
+# text_lang = "ja"
+# ref_audio_path = "/path/to/ref.wav"
+# prompt_lang = "ja"
+# streaming_mode = 2              # 流式块粒度:2=中等质量按块 / 3=首块最快但毛糙 / 1=按整句
+
+[stt]                             # 语音输入(🎤 单次 / 连续对话)
+# enabled = true
+# model = "small"                 # 本地 faster-whisper 模型:tiny/base/small/medium
+# language = "zh"                 # 识别语言;"" = 自动检测
+# server_url = "http://127.0.0.1:9881"   # whisper.cpp GPU 服务;不设或不在线 → 回退本地 CPU
+# start_command = "cd ~/dev/whisper-cpp && nix develop -c ./serve.sh"   # --services 拉起用
+
+[screen_awareness]                # 主动屏幕感知:周期截屏,她自己判断要不要开口
+# enabled = false
+# interval_minutes = 20.0         # 检查周期
+# cooldown_minutes = 10.0         # 两次主动发言的最小间隔
+# precheck_model = "claude-haiku-4-5"    # 先用廉价模型预判值不值得开口;"" = 关闭预判,
+                                  # 每次直接注入主模型(按周期计费,不推荐)
+
+[homelab]                         # 家庭服务器状态查询(homelab-hub 聚合层,只读)
+# enabled = false                 # 不在家庭网络内就保持 false
+# hub_url = "http://127.0.0.1:9201"      # 你的 homelab-hub /rk 端点(只读,无鉴权)

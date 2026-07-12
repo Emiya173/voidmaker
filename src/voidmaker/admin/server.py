@@ -1,17 +1,16 @@
 """本地管理后台:浏览器里查/改设置、看聊天日志、查/编辑记忆与权限。
 
 标准库 http.server(零依赖),只绑 127.0.0.1——能改配置/记忆/权限,属敏感操作,
-绝不暴露到网络。读写直接落到 config.yaml / 记忆 md / 历史 jsonl / permissions.json。
+绝不暴露到网络。读写直接落到 config.toml / 记忆 md / 历史 jsonl / permissions.json。
 启动:python -m voidmaker --admin(VOIDMAKER_ADMIN_ADDR=host:port 可覆盖地址)。
 """
 
 from __future__ import annotations
 
 import json
+import tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
-
-import yaml
 
 from ..character.loader import scan_characters
 from ..config import CONFIG_PATH, AppConfig, load_config
@@ -53,7 +52,7 @@ label{user-select:none}
 </nav>
 <main>
  <section id="set" class="on">
-  <p>直接编辑 config.yaml(保存前会校验;字段见 src/voidmaker/config.py)。</p>
+  <p>直接编辑 config.toml(保存前会校验;字段见 src/voidmaker/config.py)。</p>
   <textarea id="cfg"></textarea>
   <div class="row"><button class="act" onclick="saveCfg()">保存设置</button><span class="msg" id="cfgmsg"></span></div>
  </section>
@@ -81,14 +80,14 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
  b.classList.add('on'); $('#'+b.dataset.t).classList.add('on');
 });
 async function init(){
- const c=await api('/api/config'); $('#cfg').value=c.yaml||''; $('#who').textContent='· 角色 '+c.char_id;
+ const c=await api('/api/config'); $('#cfg').value=c.toml||''; $('#who').textContent='· 角色 '+c.char_id;
  window.charName=c.char_name||'她';
  $('#memt').value=(await api('/api/memory')).text||'';
  loadPerm(); loadLog();
 }
 function segText(s){ return (s&&(s.zh||s.ja))||''; }
 async function saveCfg(){
- const r=await api('/api/config',{method:'POST',body:JSON.stringify({yaml:$('#cfg').value})});
+ const r=await api('/api/config',{method:'POST',body:JSON.stringify({toml:$('#cfg').value})});
  const m=$('#cfgmsg'); m.textContent=r.ok?'已保存(重启生效)':('错误: '+r.error); m.className='msg'+(r.ok?'':' err');
 }
 async function saveMem(){
@@ -165,7 +164,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._send(PAGE.encode(), "text/html; charset=utf-8")
         if u.path == "/api/config":
             text = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else ""
-            return self._json({"yaml": text, "char_id": self._cid, "char_name": self._cname})
+            return self._json({"toml": text, "char_id": self._cid, "char_name": self._cname})
         if u.path == "/api/memory":
             return self._json({"text": CharacterMemory(self._cid).read()})
         if u.path == "/api/history":
@@ -180,9 +179,9 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         data = self._read_json()
         if path == "/api/config":
-            text = str(data.get("yaml", ""))
+            text = str(data.get("toml", ""))
             try:
-                AppConfig.model_validate(yaml.safe_load(text) or {})  # 校验后才写
+                AppConfig.model_validate(tomllib.loads(text))  # 校验后才写
             except Exception as exc:
                 return self._json({"ok": False, "error": str(exc)[:300]}, 400)
             CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
