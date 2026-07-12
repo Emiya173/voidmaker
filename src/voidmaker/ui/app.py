@@ -50,7 +50,9 @@ def run_app(cfg: AppConfig) -> int:
         if cmd == "toggle":
             window.toggle_visible()
         elif cmd == "quit":
-            app.quit()
+            # 走 close 而非 app.quit():closeEvent 里有 worker 线程收尾,
+            # 直接 quit 会 QThread-destroyed-while-running 崩溃退出
+            window.close()
 
     server = ControlServer(_on_command)
 
