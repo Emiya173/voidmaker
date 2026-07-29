@@ -9,7 +9,10 @@
 # current_character = "Sakura"    # 启动角色 id;"" = 取扫描到的第一个
 
 [agent]
-# model = "claude-sonnet-5"       # 主对话模型;"" = 用 Claude Code CLI 的默认模型
+# provider = "claude"             # "claude" = Claude Agent SDK;"codex" = Codex app-server
+# model = "claude-sonnet-5"       # 主对话模型;"" = 使用所选 CLI 的默认模型
+# reasoning_effort = "medium"      # Codex 推理强度;"" = 使用 Codex CLI 配置
+# auxiliary_model = "claude-haiku-4-5"  # 记忆整理模型;"" = 使用所选 CLI 默认
 # max_turns = 30                  # 单次回复的最大 agent 轮数;默认不限制
 
 [ui]

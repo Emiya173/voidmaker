@@ -4,7 +4,7 @@
 
 桌面角色 AI 助手(NixOS + niri/Wayland),以 ~/dev/sakura(Rvosy/sakura)为参考重写。
 继承:角色包格式、分段双语回复协议(ja+zh+tone+portrait)、主动感知的产品设计。
-重写:agent 内核用 Claude Agent SDK(不自研 tool_calls 循环),UI 用精简 PySide6。
+重写:agent 内核支持 Claude Agent SDK 与 Codex app-server,UI 用精简 PySide6。
 
 ## 常用命令
 
@@ -24,8 +24,8 @@
 
 ## 架构要点
 
-- agent/client.py:CharacterAgent 是唯一的 LLM 入口;自定义工具将来用
-  @tool + create_sdk_mcp_server 注册,权限确认用 SDK 的 can_use_tool/hooks。
+- agent/client.py:CharacterAgent 是唯一的 LLM 入口,按 provider 选择后端;
+  Claude 工具走进程内 MCP,Codex 工具走 app-server dynamic tools,共用权限存储。
 - agent/reply.py:分段回复协议。解析必须宽容(模型输出坏 JSON 时兜底为单段中文)。
 - character/:兼容 sakura 的 character.json;字段以实际 .char 包为准
   (权威解析逻辑:~/dev/sakura/app/config/character_loader.py)。

@@ -1,4 +1,4 @@
-"""内置工具:进程内 MCP server(Claude Agent SDK @tool)。
+"""内置工具:同时供 Claude MCP server 与 Codex dynamic tools 使用。
 
 - take_screenshot:grim 全屏截图,以图片内容块返回给模型(她能看到屏幕)
 - write_note / read_notes:markdown 笔记(data 目录)
@@ -43,13 +43,13 @@ NOTES_PATH = DATA_DIR / "notes.md"
 ReminderScheduler = Callable[[str, float], None]
 
 
-def build_pet_server(
+def build_pet_tools(
     schedule_reminder: ReminderScheduler | None = None,
     memory: CharacterMemory | None = None,
     homelab_url: str | None = None,
     show_notepad: Callable[[str, str, str], None] | None = None,
 ):
-    """构造进程内 MCP server。返回 (server, allowed_tool_names)。
+    """构造带闭包状态的工具列表。
 
     homelab_url 非空时注册家庭服务器状态/拓扑工具(只读)。
     show_notepad 非空时注册记事窗口工具。
@@ -268,6 +268,17 @@ def build_pet_server(
             return {"content": [{"type": "text", "text": topo}]}
 
         tools += [homelab_status, homelab_topology]
+    return tools
+
+
+def build_pet_server(
+    schedule_reminder: ReminderScheduler | None = None,
+    memory: CharacterMemory | None = None,
+    homelab_url: str | None = None,
+    show_notepad: Callable[[str, str, str], None] | None = None,
+):
+    """构造 Claude Agent SDK 进程内 MCP server。"""
+    tools = build_pet_tools(schedule_reminder, memory, homelab_url, show_notepad)
     server = create_sdk_mcp_server(name="pet", version="1.0.0", tools=tools)
     allowed = [f"mcp__pet__{t.name}" for t in tools]
     return server, allowed

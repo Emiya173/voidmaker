@@ -1,8 +1,4 @@
-"""Claude Agent SDK 封装:角色化多轮会话。
-
-取代旧 sakura 的 AgentRuntime/ToolRegistry/MCP 桥:agent loop、工具循环、
-MCP 接入、权限回调全部由 SDK 提供,这里只做角色系统提示组装与回复解析。
-"""
+"""角色化多轮会话:按配置选择 Claude Agent SDK 或 Codex app-server。"""
 
 from __future__ import annotations
 
@@ -85,13 +81,8 @@ def build_system_prompt(card: CharacterCard | None, memory_text: str = "") -> st
     return "\n\n".join(parts)
 
 
-class CharacterAgent:
-    """一个角色的持续会话。用法:
-
-    async with CharacterAgent(card, cfg) as agent:
-        async for seg in agent.chat("你好"):
-            ...
-    """
+class ClaudeCharacterAgent:
+    """Claude Agent SDK 持续会话。"""
 
     def __init__(
         self,
@@ -135,7 +126,7 @@ class CharacterAgent:
         self._client = ClaudeSDKClient(options=options)
         self.last_usage: dict | None = None  # 上一轮 usage(含 cache_read/creation,诊断用)
 
-    async def __aenter__(self) -> "CharacterAgent":
+    async def __aenter__(self) -> "ClaudeCharacterAgent":
         await self._client.connect()
         return self
 
@@ -182,3 +173,48 @@ class CharacterAgent:
                 self.last_usage = message.usage
         for segment in parse_segments("".join(text_parts)):
             yield segment
+
+
+class CharacterAgent:
+    """按 ``agent.provider`` 创建一个角色持续会话。
+
+    两个后端暴露相同的 async context manager、``chat()`` 和
+    ``last_usage`` 接口,因此 CLI 与 Qt worker 无需感知 provider。
+    """
+
+    def __new__(
+        cls,
+        card: CharacterCard | None,
+        cfg: AgentConfig,
+        schedule_reminder: ReminderScheduler | None = None,
+        memory: CharacterMemory | None = None,
+        permission_handler: PermissionHandler | None = None,
+        permissions: PermissionStore | None = None,
+        homelab_url: str | None = None,
+        show_notepad: Callable[[str, str, str], None] | None = None,
+    ):
+        if cfg.provider == "codex":
+            from .codex import CodexCharacterAgent
+
+            prompt = build_system_prompt(card, memory.read() if memory else "")
+            return CodexCharacterAgent(
+                card,
+                cfg,
+                prompt,
+                schedule_reminder,
+                memory,
+                permission_handler,
+                permissions,
+                homelab_url,
+                show_notepad,
+            )
+        return ClaudeCharacterAgent(
+            card,
+            cfg,
+            schedule_reminder,
+            memory,
+            permission_handler,
+            permissions,
+            homelab_url,
+            show_notepad,
+        )

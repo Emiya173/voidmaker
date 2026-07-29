@@ -16,13 +16,14 @@ from ..agent.precheck import screen_worth_speaking
 class PrecheckWorker(QThread):
     decided = Signal(bool)  # True = 值得开口
 
-    def __init__(self, model: str, parent=None):
+    def __init__(self, model: str, provider: str = "claude", parent=None):
         super().__init__(parent)
         self._model = model
+        self._provider = provider
 
     def run(self) -> None:
         try:
-            speak = asyncio.run(screen_worth_speaking(self._model))
+            speak = asyncio.run(screen_worth_speaking(self._model, self._provider))
         except Exception as exc:
             print(f"[voidmaker] 主动感知预判失败(本轮沉默): {exc}", flush=True)
             speak = False

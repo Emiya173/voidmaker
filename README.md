@@ -1,6 +1,6 @@
 # VoidMaker
 
-桌面角色 AI 助手:角色包驱动、主动屏幕感知、Claude Agent SDK 内核。
+桌面角色 AI 助手:角色包驱动、主动屏幕感知、Claude Agent SDK / Codex 双后端。
 参考项目:[Rvosy/sakura](https://github.com/Rvosy/sakura),
 主要继承其角色包格式(`.char` / `character.json`)与分段双语回复协议;agent 内核与 UI 全部重写。
 
@@ -12,13 +12,29 @@ python -m voidmaker --cli   # 终端对话原型
 pytest             # 跑测试
 ```
 
-依赖 Claude Code CLI 已登录(Claude Agent SDK 通过它驱动 agent loop)。
+主对话后端可选:
+
+- Claude(默认):Claude Code CLI 已登录,由 Claude Agent SDK 驱动。
+- Codex:Codex CLI 已安装并完成 `codex login`,由 `codex app-server` 驱动。
+
+在 `~/.config/voidmaker/config.toml` 切换:
+
+```toml
+[agent]
+provider = "codex"
+model = ""              # 使用 Codex CLI 默认模型;也可填可用的 Codex 模型
+reasoning_effort = ""   # 使用 Codex CLI 配置;也可填 low/medium/high/xhigh
+auxiliary_model = ""    # 记忆整理使用 CLI 默认模型
+```
+
+Codex 后端使用临时 app-server thread、只读命令沙箱和现有权限确认 UI;桌宠内置
+工具通过 dynamic tools 接入。需要支持该协议的较新 Codex CLI。
 
 ## 部署
 
 以个人桌面环境(NixOS + niri)举例，实际应该没有硬性的发行版要求.
 
-**前置**:NixOS + niri/Wayland;Claude Code CLI 已登录;可选 GPT-SoVITS(TTS,
+**前置**:NixOS + niri/Wayland;Claude Code CLI 或 Codex CLI 至少一个已登录;可选 GPT-SoVITS(TTS,
 见下)、麦克风(语音输入)。可复现性:`flake.lock` 钉死 nixpkgs、`uv.lock` 锁定
 Python 依赖,`nix develop` 重建即可(需联网拉 wheel)。
 
@@ -241,7 +257,7 @@ python -m voidmaker --admin     # 打开 http://127.0.0.1:8760
 
 ```
 src/voidmaker/
-├─ agent/        # Claude Agent SDK 封装 + 分段回复协议 + 预判/记忆整理子 agent
+├─ agent/        # Claude/Codex 后端 + 分段回复协议 + 预判/记忆整理子 agent
 ├─ backchannel.py# 快速接话:规则分类 + 模板轮换(等待期 filler)
 ├─ character/    # 角色包加载(兼容 sakura 格式)
 ├─ perception/   # 截图 / 屏幕感知(grim / portal)

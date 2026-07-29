@@ -6,8 +6,9 @@ import os
 import sys
 import tomllib
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 CONFIG_PATH = Path(os.environ.get("VOIDMAKER_CONFIG", "~/.config/voidmaker/config.toml")).expanduser()
 DATA_DIR = Path(os.environ.get("VOIDMAKER_DATA", "~/.local/share/voidmaker")).expanduser()
@@ -35,10 +36,25 @@ class TTSConfig(SectionModel):
 
 
 class AgentConfig(SectionModel):
-    # 主对话模型;None = 用 Claude Code CLI 的默认模型,也可写 "claude-opus-4-8" 等
-    # (主动感知预判/记忆整理另有各自的廉价模型,见 screen_awareness.precheck_model)
-    model: str | None = "claude-sonnet-5"
+    provider: Literal["claude", "codex"] = "claude"
+    # 主对话模型;None = 使用所选 CLI 的默认模型
+    model: str | None = None
+    # Codex 推理强度(low/medium/high/xhigh 等);None = 使用 Codex CLI 配置
+    reasoning_effort: str | None = None
+    # 记忆整理模型;None = 使用所选 CLI 的默认模型
+    auxiliary_model: str | None = None
     max_turns: int | None = None
+
+    @model_validator(mode="after")
+    def _provider_defaults(self):
+        # 保持原有 Claude 默认值;Codex 默认跟随 CLI 当前推荐模型。
+        # 显式 model="" 已被 SectionModel 转成 None,此时仍表示 CLI 默认。
+        if self.provider == "claude":
+            if "model" not in self.model_fields_set:
+                self.model = "claude-sonnet-5"
+            if "auxiliary_model" not in self.model_fields_set:
+                self.auxiliary_model = "claude-haiku-4-5"
+        return self
 
 
 class ScreenAwarenessConfig(SectionModel):
@@ -99,6 +115,16 @@ class AppConfig(SectionModel):
     homelab: HomelabConfig = Field(default_factory=HomelabConfig)
     characters_dir: Path = Path("characters")
     current_character: str | None = None
+
+    @model_validator(mode="after")
+    def _align_provider_defaults(self):
+        # Codex 模式不应因默认的 Haiku 预判而隐式要求 Claude Code 登录。
+        if (
+            self.agent.provider == "codex"
+            and "precheck_model" not in self.screen_awareness.model_fields_set
+        ):
+            self.screen_awareness.precheck_model = None
+        return self
 
 
 def load_config() -> AppConfig:

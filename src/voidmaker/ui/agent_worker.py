@@ -23,7 +23,7 @@ _STOP = object()
 class PermissionRequest:
     """跨线程权限询问:主线程 UI 调 respond(choice),asyncio 侧 await future。
 
-    choice: "once"(仅这次) | "session"(本次都允许) | "deny"(拒绝)。
+    choice: "once"(仅这次) | "always"(一直允许) | "deny"(拒绝)。
     """
 
     def __init__(self, loop: asyncio.AbstractEventLoop, tool_name: str, tool_input: dict):

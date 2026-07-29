@@ -24,7 +24,11 @@ from ..perception.proactive import PRECHECK_PROMPT, PRECHECK_TEXT_PROMPT
 from ..perception.screenshot import capture_focused_window
 
 
-async def _ask_text(model: str, prompt: str) -> str:
+async def _ask_text(model: str | None, prompt: str, provider: str = "claude") -> str:
+    if provider == "codex":
+        from .codex import codex_query
+
+        return (await codex_query(prompt, model=model)).upper()
     options = ClaudeAgentOptions(model=model, max_turns=1, allowed_tools=[])
     parts: list[str] = []
     async for message in query(prompt=prompt, options=options):
@@ -35,14 +39,27 @@ async def _ask_text(model: str, prompt: str) -> str:
     return "".join(parts).upper()
 
 
-async def _image_worth_speaking(model: str) -> bool:
+async def _image_worth_speaking(model: str | None, provider: str = "claude") -> bool:
     """Tier B:截聚焦窗口(失败自动回退单屏/全屏)→ haiku 图像二分类。"""
     path = await capture_focused_window()
     mime = "image/png" if path.suffix == ".png" else "image/jpeg"
     try:
-        image_data = base64.standard_b64encode(path.read_bytes()).decode()
+        raw_image = path.read_bytes()
     finally:
         path.unlink(missing_ok=True)
+
+    if provider == "codex":
+        from .codex import codex_query
+
+        result = await codex_query(
+            PRECHECK_PROMPT,
+            model=model,
+            image=raw_image,
+            image_suffix=f".{mime.rsplit('/', 1)[-1]}",
+        )
+        return "SPEAK" in result.upper()
+
+    image_data = base64.standard_b64encode(raw_image).decode()
 
     async def _messages():
         yield {
@@ -75,7 +92,7 @@ async def _image_worth_speaking(model: str) -> bool:
     return "SPEAK" in "".join(parts).upper()
 
 
-async def screen_worth_speaking(model: str) -> bool:
+async def screen_worth_speaking(model: str | None, provider: str = "claude") -> bool:
     """分层判断是否值得主动开口。多数情况只花一次纯文本调用。"""
     try:
         win = await query_focused_window()
@@ -83,7 +100,9 @@ async def screen_worth_speaking(model: str) -> bool:
         win = None  # niri 不可用:退到全屏截图路径
 
     if win is None:
-        return await _image_worth_speaking(model)
+        if provider == "claude":
+            return await _image_worth_speaking(model)
+        return await _image_worth_speaking(model, provider)
 
     try:
         media = await read_now_playing()
@@ -92,10 +111,15 @@ async def screen_worth_speaking(model: str) -> bool:
     prompt = PRECHECK_TEXT_PROMPT.format(
         window=format_focused_window(win), media=format_now_playing(media)
     )
-    verdict = await _ask_text(model, prompt)
+    if provider == "claude":
+        verdict = await _ask_text(model, prompt)
+    else:
+        verdict = await _ask_text(model, prompt, provider)
     if "SILENT" in verdict:
         return False
     if "SPEAK" in verdict:
         return True
     # LOOK(或意外输出)→ 截聚焦单屏细看
-    return await _image_worth_speaking(model)
+    if provider == "claude":
+        return await _image_worth_speaking(model)
+    return await _image_worth_speaking(model, provider)

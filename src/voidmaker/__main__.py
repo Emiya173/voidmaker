@@ -44,7 +44,11 @@ async def cli_chat() -> None:
 
     async def _consolidate() -> None:
         try:
-            if await consolidate_memory(char_id):
+            if await consolidate_memory(
+                char_id,
+                model=cfg.agent.auxiliary_model,
+                provider=cfg.agent.provider,
+            ):
                 print("[voidmaker] 记忆整理完成(下次会话生效)", flush=True)
         except Exception as exc:
             print(f"[voidmaker] 记忆整理失败: {exc}", flush=True)

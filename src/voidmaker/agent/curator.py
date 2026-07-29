@@ -49,7 +49,9 @@ def _format_history(lines: list[str]) -> str:
 
 
 async def consolidate_memory(
-    character_id: str, model: str = "claude-haiku-4-5"
+    character_id: str,
+    model: str | None = "claude-haiku-4-5",
+    provider: str = "claude",
 ) -> bool:
     """返回是否实际执行了整理。"""
     history = ChatHistory(character_id)
@@ -67,14 +69,19 @@ async def consolidate_memory(
     pending = pending[-MAX_PENDING_CHARS:]
 
     prompt = CURATOR_PROMPT.format(memory=memory.read() or "(空)", pending=pending)
-    options = ClaudeAgentOptions(model=model, max_turns=1, allowed_tools=[])
-    text_parts: list[str] = []
-    async for message in query(prompt=prompt, options=options):
-        if isinstance(message, AssistantMessage):
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    text_parts.append(block.text)
-    result = "".join(text_parts).strip()
+    if provider == "codex":
+        from .codex import codex_query
+
+        result = (await codex_query(prompt, model=model)).strip()
+    else:
+        options = ClaudeAgentOptions(model=model, max_turns=1, allowed_tools=[])
+        text_parts: list[str] = []
+        async for message in query(prompt=prompt, options=options):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        text_parts.append(block.text)
+        result = "".join(text_parts).strip()
     if not result.startswith("-"):
         return False  # 输出不像记忆列表,放弃本轮(下次重试,偏移不前进)
     memory.replace(result)
