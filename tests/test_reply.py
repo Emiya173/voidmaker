@@ -1,4 +1,5 @@
-from voidmaker.agent.reply import parse_segments
+from voidmaker.agent.client import DISPLAY_CHANNEL_INSTRUCTION, build_system_prompt
+from voidmaker.agent.reply import SEGMENT_FORMAT_INSTRUCTION, parse_segments
 
 
 def test_parse_valid_array():
@@ -37,3 +38,21 @@ def test_silence_paths_yield_no_segments():
     assert parse_segments("   ") == []
     assert parse_segments('[{}]') == []
     assert parse_segments('[{"ja": "", "zh": " ", "tone": "中性", "portrait": ""}]') == []
+
+
+def test_prompt_requires_notepad_for_long_structured_content():
+    prompt = build_system_prompt(None)
+    assert DISPLAY_CHANNEL_INSTRUCTION in prompt
+    assert "三个及以上相互独立" in prompt
+    assert "超过 200 字" in prompt
+    assert "有哪些/还有哪些" in prompt
+    assert "禁止为了避开" in prompt
+    assert "最终回复前" in prompt
+    assert "不得在 ja 或 zh" in prompt
+
+
+def test_segment_prompt_requires_spoken_text_and_subtitle_to_match():
+    assert "实际送入 TTS" in SEGMENT_FORMAT_INSTRUCTION
+    assert "逐段一一对应" in SEGMENT_FORMAT_INSTRUCTION
+    assert "信息量必须一致" in SEGMENT_FORMAT_INSTRUCTION
+    assert "不能单独增加" in SEGMENT_FORMAT_INSTRUCTION

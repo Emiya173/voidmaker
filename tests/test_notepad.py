@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from voidmaker.agent.tools import build_pet_server  # noqa: E402
+from voidmaker.agent.tools import build_pet_server, build_pet_tools  # noqa: E402
 from voidmaker.ui.notepad_window import WINDOW_TITLE, NotepadWindow  # noqa: E402
 
 
@@ -51,3 +51,12 @@ def test_tool_registered_only_with_callback():
     assert "mcp__pet__show_notepad" not in allowed  # 无回调不注册
     _s2, allowed2 = build_pet_server(show_notepad=lambda *a: None)
     assert "mcp__pet__show_notepad" in allowed2
+
+
+def test_tool_description_marks_structured_content_as_mandatory():
+    tools = build_pet_tools(show_notepad=lambda *a: None)
+    notepad = next(tool for tool in tools if tool.name == "show_notepad")
+    assert "强制显示通道" in notepad.description
+    assert "三个以上独立项目" in notepad.description
+    assert "有哪些/还有哪些" in notepad.description
+    assert "必须调用" in notepad.description

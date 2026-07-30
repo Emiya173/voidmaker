@@ -226,10 +226,12 @@ def build_pet_tools(
     if show_notepad is not None:
         @tool(
             "show_notepad",
-            "在独立记事窗口展示整理好的较长/结构化内容,不塞进聊天气泡、也不读出来。"
-            "适合:终端输出或日志(format=text)、markdown 文档/清单/代码/表格"
-            "(format=markdown)、HTML 富文本(format=html)。想给用户看网页内容时,"
-            "先用工具抓取再以 markdown/html 展示;交互式浏览仍用 open_url。",
+            "较长或结构化内容的强制显示通道。需列举/解释三个以上独立项目(无论是否"
+            "使用列表符号),包含表格、代码块、日志、命令输出、多级标题、预计超过"
+            "200 个中文字,或用户询问「有哪些/还有哪些/列出/逐项/分别」及要求整理/"
+            "对比/汇总多个项目时,必须调用本工具,不能拆成多个聊天分段来替代。"
+            "终端输出或日志用 format=text;文档/清单/代码/表格用 format=markdown;"
+            "富文本用 format=html。成功后最终回复只简短提示用户查看记事本,不要重复正文。",
             {"title": str, "content": str, "format": str},
         )
         async def show_notepad_tool(args: dict):

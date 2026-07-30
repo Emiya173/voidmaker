@@ -48,8 +48,7 @@ TOOL_HINT = """\
   now_playing(正在播放的媒体)、take_screenshot(截屏,看具体画面时才用)、
   read_clipboard(读剪贴板文本)
 - 行动:open_url(浏览器开网址)、open_path(默认应用开文件/目录)、notify(桌面通知)
-- 展示:show_notepad——较长/结构化内容(终端输出、markdown 文档、代码、表格、
-  富文本)用独立记事窗口展示,别硬塞进气泡或读出来。回复里简短点一句即可。
+- 展示:show_notepad——较长或结构化内容的专用显示通道;严格按下方「显示通道协议」调用。
 - 家庭服务器(若可用):homelab_status(Jellyfin/相册/下载/追番实时状态)、
   homelab_topology(网络拓扑 + 各服务准确访问地址)。要打开/提及家里某个服务的
   网址时,先查 homelab_topology 拿准确地址,绝不要凭泛域名/子域名自己拼
@@ -58,6 +57,24 @@ TOOL_HINT = """\
   remember(记住关于用户的长期事实,悄悄记不必每次提及)
 想知道用户在忙什么优先 focused_window / list_windows(快且省),需要看画面内容才截屏。
 open_url/open_path/read_clipboard 会请求用户确认,放心大胆用。"""
+
+DISPLAY_CHANNEL_INSTRUCTION = """\
+【显示通道协议——必须遵守,优先于一般回答习惯】
+聊天气泡与日文语音只用于简短对话。预计回答满足以下任一条件时,必须在最终回复前
+先调用 show_notepad,不能用聊天气泡中的长文本代替:
+1. 需要列举或解释三个及以上相互独立的项目、问题、步骤或案例,无论是否使用列表符号;
+2. 包含表格、代码块、日志、命令输出或多级标题;
+3. 完整中文正文预计超过 200 字;
+4. 用户询问「有哪些/还有哪些/列出/逐项/分别」,或要求整理、对比、汇总多个项目。
+
+禁止为了避开 show_notepad 而把同一份结构化内容拆成多个聊天分段;判定依据是完整回答
+包含多少独立项目,不是 Markdown 格式、分段数量或每段长度。
+
+调用 show_notepad 时,把完整、可独立阅读的内容放进 content,按内容选择
+markdown、text 或 html。工具成功后,最终回复只能保留一至两个简短的日中对照分段,
+例如「詳しくノートにまとめたよ。/ 详细内容整理到记事本里了。」,不得在 ja 或 zh
+中重复记事本正文。只有工具不可用或调用失败时,才在气泡里给出简短的日中对照摘要,
+并说明记事本未能打开。"""
 
 MEMORY_HINT = """\
 你对用户的长期记忆(往次会话沉淀,可信但可能过时):
@@ -77,6 +94,7 @@ def build_system_prompt(card: CharacterCard | None, memory_text: str = "") -> st
     if memory_text.strip():
         parts.append(MEMORY_HINT.format(memory=memory_text.strip()))
     parts.append(TOOL_HINT)
+    parts.append(DISPLAY_CHANNEL_INSTRUCTION)
     parts.append(SEGMENT_FORMAT_INSTRUCTION)
     return "\n\n".join(parts)
 

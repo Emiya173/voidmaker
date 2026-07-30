@@ -30,8 +30,18 @@ REPLY_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "ja": {"type": "string"},
-                    "zh": {"type": "string"},
+                    "ja": {
+                        "type": "string",
+                        "description": (
+                            "实际送入 TTS 的日文语音原文;必须与同段 zh 表达完全相同的信息和语气。"
+                        ),
+                    },
+                    "zh": {
+                        "type": "string",
+                        "description": (
+                            "气泡显示的中文字幕;只能忠实翻译同段 ja,不得单独增加细节、列表或链接。"
+                        ),
+                    },
                     "tone": {"type": "string"},
                     "portrait": {"type": "string"},
                 },

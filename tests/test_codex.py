@@ -51,6 +51,8 @@ def test_reply_schema_requires_all_segment_fields():
     item = REPLY_SCHEMA["properties"]["segments"]["items"]
     assert set(item["required"]) == {"ja", "zh", "tone", "portrait"}
     assert item["additionalProperties"] is False
+    assert "完全相同" in item["properties"]["ja"]["description"]
+    assert "忠实翻译" in item["properties"]["zh"]["description"]
 
 
 def test_wrapped_codex_reply_is_unpacked():
