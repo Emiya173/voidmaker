@@ -66,6 +66,8 @@ class ScreenAwarenessConfig(SectionModel):
     # 高频预判用的廉价模型:先让它看截图判断值不值得开口,值得才动用主模型。
     # None = 关闭预判,每次直接注入主 agent(旧行为,主模型按周期计费)
     precheck_model: str | None = "claude-haiku-4-5"
+    # Codex 预判的独立推理强度;None = 使用 Codex CLI 配置。
+    precheck_reasoning_effort: str | None = None
 
 
 class HomelabConfig(SectionModel):

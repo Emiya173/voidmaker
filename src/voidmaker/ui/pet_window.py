@@ -237,6 +237,7 @@ class PetWindow(QWidget):
         self._last_proactive_spoke = 0.0
         self._cooldown_s = cfg.screen_awareness.cooldown_minutes * 60
         self._precheck_model = cfg.screen_awareness.precheck_model
+        self._precheck_reasoning_effort = cfg.screen_awareness.precheck_reasoning_effort
         self._precheck_provider = cfg.agent.provider
         self._precheck: PrecheckWorker | None = None
         if cfg.screen_awareness.enabled:
@@ -358,7 +359,12 @@ class PetWindow(QWidget):
         if self._precheck is not None and self._precheck.isRunning():
             return  # 上一轮预判未完
         print(f"[voidmaker] 主动感知:预判({self._precheck_model})", flush=True)
-        self._precheck = PrecheckWorker(self._precheck_model, self._precheck_provider, self)
+        self._precheck = PrecheckWorker(
+            self._precheck_model,
+            self._precheck_provider,
+            self._precheck_reasoning_effort,
+            self,
+        )
         self._precheck.decided.connect(self._on_precheck_decided)
         self._precheck.start()
 

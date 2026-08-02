@@ -24,11 +24,16 @@ from ..perception.proactive import PRECHECK_PROMPT, PRECHECK_TEXT_PROMPT
 from ..perception.screenshot import capture_focused_window
 
 
-async def _ask_text(model: str | None, prompt: str, provider: str = "claude") -> str:
+async def _ask_text(
+    model: str | None,
+    prompt: str,
+    provider: str = "claude",
+    reasoning_effort: str | None = None,
+) -> str:
     if provider == "codex":
         from .codex import codex_query
 
-        return (await codex_query(prompt, model=model)).upper()
+        return (await codex_query(prompt, model=model, reasoning_effort=reasoning_effort)).upper()
     options = ClaudeAgentOptions(model=model, max_turns=1, allowed_tools=[])
     parts: list[str] = []
     async for message in query(prompt=prompt, options=options):
@@ -39,7 +44,11 @@ async def _ask_text(model: str | None, prompt: str, provider: str = "claude") ->
     return "".join(parts).upper()
 
 
-async def _image_worth_speaking(model: str | None, provider: str = "claude") -> bool:
+async def _image_worth_speaking(
+    model: str | None,
+    provider: str = "claude",
+    reasoning_effort: str | None = None,
+) -> bool:
     """Tier B:截聚焦窗口(失败自动回退单屏/全屏)→ haiku 图像二分类。"""
     path = await capture_focused_window()
     mime = "image/png" if path.suffix == ".png" else "image/jpeg"
@@ -54,6 +63,7 @@ async def _image_worth_speaking(model: str | None, provider: str = "claude") -> 
         result = await codex_query(
             PRECHECK_PROMPT,
             model=model,
+            reasoning_effort=reasoning_effort,
             image=raw_image,
             image_suffix=f".{mime.rsplit('/', 1)[-1]}",
         )
@@ -92,7 +102,11 @@ async def _image_worth_speaking(model: str | None, provider: str = "claude") -> 
     return "SPEAK" in "".join(parts).upper()
 
 
-async def screen_worth_speaking(model: str | None, provider: str = "claude") -> bool:
+async def screen_worth_speaking(
+    model: str | None,
+    provider: str = "claude",
+    reasoning_effort: str | None = None,
+) -> bool:
     """分层判断是否值得主动开口。多数情况只花一次纯文本调用。"""
     try:
         win = await query_focused_window()
@@ -102,7 +116,9 @@ async def screen_worth_speaking(model: str | None, provider: str = "claude") -> 
     if win is None:
         if provider == "claude":
             return await _image_worth_speaking(model)
-        return await _image_worth_speaking(model, provider)
+        if reasoning_effort is None:
+            return await _image_worth_speaking(model, provider)
+        return await _image_worth_speaking(model, provider, reasoning_effort)
 
     try:
         media = await read_now_playing()
@@ -113,8 +129,10 @@ async def screen_worth_speaking(model: str | None, provider: str = "claude") -> 
     )
     if provider == "claude":
         verdict = await _ask_text(model, prompt)
-    else:
+    elif reasoning_effort is None:
         verdict = await _ask_text(model, prompt, provider)
+    else:
+        verdict = await _ask_text(model, prompt, provider, reasoning_effort)
     if "SILENT" in verdict:
         return False
     if "SPEAK" in verdict:
@@ -122,4 +140,6 @@ async def screen_worth_speaking(model: str | None, provider: str = "claude") -> 
     # LOOK(或意外输出)→ 截聚焦单屏细看
     if provider == "claude":
         return await _image_worth_speaking(model)
-    return await _image_worth_speaking(model, provider)
+    if reasoning_effort is None:
+        return await _image_worth_speaking(model, provider)
+    return await _image_worth_speaking(model, provider, reasoning_effort)

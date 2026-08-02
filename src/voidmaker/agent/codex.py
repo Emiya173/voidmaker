@@ -64,6 +64,7 @@ class CodexAgentError(RuntimeError):
 async def codex_query(
     prompt: str,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     image: bytes | None = None,
     image_suffix: str = ".png",
 ) -> str:
@@ -88,6 +89,8 @@ async def codex_query(
     ]
     if model:
         command += ["--model", model]
+    if reasoning_effort:
+        command += ["--config", f"model_reasoning_effort={json.dumps(reasoning_effort)}"]
     if image_path:
         command += ["--image", image_path]
     command.append("-")

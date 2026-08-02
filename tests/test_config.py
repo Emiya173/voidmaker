@@ -44,6 +44,21 @@ def test_codex_can_use_explicit_models():
     assert cfg.screen_awareness.precheck_model == "gpt-5.4-mini"
 
 
+def test_screen_precheck_can_use_independent_reasoning_effort():
+    cfg = AppConfig.model_validate(
+        {
+            "agent": {"provider": "codex", "reasoning_effort": "medium"},
+            "screen_awareness": {
+                "precheck_model": "gpt-5.6-luna",
+                "precheck_reasoning_effort": "low",
+            },
+        }
+    )
+    assert cfg.agent.reasoning_effort == "medium"
+    assert cfg.screen_awareness.precheck_model == "gpt-5.6-luna"
+    assert cfg.screen_awareness.precheck_reasoning_effort == "low"
+
+
 def test_example_config_parses_and_validates():
     text = EXAMPLE.read_text(encoding="utf-8")
     AppConfig.model_validate(tomllib.loads(text))  # 注释状态(几乎全默认)
