@@ -1,5 +1,12 @@
+import asyncio
+import json
+from types import SimpleNamespace
+
+from voidmaker.config import AgentConfig
 from voidmaker.agent.codex import (
     REPLY_SCHEMA,
+    _APP_SERVER_STREAM_LIMIT,
+    CodexCharacterAgent,
     _dynamic_tool_spec,
     _input_schema,
     _parse_codex_reply,
@@ -61,3 +68,16 @@ def test_wrapped_codex_reply_is_unpacked():
     )
     assert len(segments) == 1
     assert segments[0].zh == "好的"
+
+
+async def test_app_server_reader_accepts_large_screenshot_event():
+    reader = asyncio.StreamReader(limit=_APP_SERVER_STREAM_LIMIT)
+    payload = {"method": "item/completed", "params": {"image": "A" * (128 * 1024)}}
+    reader.feed_data(json.dumps(payload).encode() + b"\n")
+    reader.feed_eof()
+
+    agent = CodexCharacterAgent(None, AgentConfig(provider="codex"), "")
+    agent._process = SimpleNamespace(stdout=reader)
+    message = await agent._read()
+    assert message["method"] == "item/completed"
+    assert len(message["params"]["image"]) == 128 * 1024

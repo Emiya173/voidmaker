@@ -55,6 +55,9 @@ REPLY_SCHEMA = {
 }
 
 _JSON_TYPES = {str: "string", int: "integer", float: "number", bool: "boolean"}
+# app-server 使用逐行 JSON-RPC;截图工具结果含 base64,单行会轻易超过 asyncio
+# 子进程默认的 64 KiB StreamReader 上限。
+_APP_SERVER_STREAM_LIMIT = 16 * 1024 * 1024
 
 
 class CodexAgentError(RuntimeError):
@@ -196,6 +199,7 @@ class CodexCharacterAgent:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=_APP_SERVER_STREAM_LIMIT,
         )
         self._stderr_task = asyncio.create_task(self._drain_stderr(self._process))
         try:
