@@ -1,6 +1,6 @@
 [project]
 name = "voidmaker"
-version = "0.2.0"
+version = "0.2.1"
 description = "桌面角色 AI 助手：角色包驱动、主动屏幕感知、Claude/Codex 双 agent 后端"
 requires-python = ">=3.12"
 dependencies = [
