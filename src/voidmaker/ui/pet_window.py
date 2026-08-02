@@ -26,8 +26,8 @@ from PySide6.QtWidgets import (
 from ..agent.reply import ReplySegment
 from ..backchannel import BackchannelResolver, classify, load_manifest
 from ..character.model import CharacterCard
-from ..config import AppConfig
-from ..perception.proactive import PROACTIVE_PROMPT
+from ..config import AppConfig, save_config_bool
+from ..perception.proactive import build_proactive_prompt
 from ..storage.history import ChatHistory
 from ..storage.memory import CharacterMemory
 from ..storage.permissions import PermissionStore
@@ -238,6 +238,7 @@ class PetWindow(QWidget):
         self._cooldown_s = cfg.screen_awareness.cooldown_minutes * 60
         self._precheck_model = cfg.screen_awareness.precheck_model
         self._precheck_reasoning_effort = cfg.screen_awareness.precheck_reasoning_effort
+        self._casual_chat_enabled = cfg.screen_awareness.casual_chat_enabled
         self._precheck_provider = cfg.agent.provider
         self._precheck: PrecheckWorker | None = None
         if cfg.screen_awareness.enabled:
@@ -247,7 +248,8 @@ class PetWindow(QWidget):
             self._proactive_timer.start()
             print(
                 f"[voidmaker] 主动感知已开启(每 {cfg.screen_awareness.interval_minutes:g} 分钟,"
-                f"冷却 {cfg.screen_awareness.cooldown_minutes:g} 分钟)",
+                f"冷却 {cfg.screen_awareness.cooldown_minutes:g} 分钟,"
+                f"主动闲聊{'开启' if self._casual_chat_enabled else '关闭'})",
                 flush=True,
             )
 
@@ -363,6 +365,7 @@ class PetWindow(QWidget):
             self._precheck_model,
             self._precheck_provider,
             self._precheck_reasoning_effort,
+            self._casual_chat_enabled,
             self,
         )
         self._precheck.decided.connect(self._on_precheck_decided)
@@ -380,11 +383,25 @@ class PetWindow(QWidget):
 
     def _send_proactive(self) -> None:
         self._proactive_round = True
-        if self._worker.send(PROACTIVE_PROMPT):
+        if self._worker.send(build_proactive_prompt(self._casual_chat_enabled)):
             self._input.setEnabled(False)  # 占用一轮,防止并发
             self._input.setPlaceholderText("(她瞥了一眼屏幕……)")
         else:
             self._proactive_round = False
+
+    def _set_casual_chat(self, enabled: bool) -> bool:
+        """立即切换主动闲聊并持久化到 config.toml。"""
+        enabled = bool(enabled)
+        if enabled == self._casual_chat_enabled:
+            return True
+        try:
+            save_config_bool("screen_awareness", "casual_chat_enabled", enabled)
+        except Exception as exc:
+            print(f"[voidmaker] 保存主动闲聊设置失败: {exc}", flush=True)
+            return False
+        self._casual_chat_enabled = enabled
+        print(f"[voidmaker] 主动闲聊已{'开启' if enabled else '关闭'}", flush=True)
+        return True
 
     # --- 语音输入 ---
 
@@ -599,6 +616,11 @@ class PetWindow(QWidget):
         auto_action.setChecked(self._permissions.auto)
         auto_action.toggled.connect(self._permissions.set_auto)
         menu.addAction(auto_action)
+        casual_action = QAction("主动闲聊(正常活动也可搭话)", menu)
+        casual_action.setCheckable(True)
+        casual_action.setChecked(self._casual_chat_enabled)
+        casual_action.toggled.connect(self._set_casual_chat)
+        menu.addAction(casual_action)
         menu.addSeparator()
         if self._transcriber is not None:
             voice_chat_action = QAction("语音连续对话", menu)

@@ -143,7 +143,8 @@ cp docs/voidmaker.desktop ~/.local/share/applications/   # Exec 按注释改成�
 `~/.local/share/icons/hicolor/<尺寸>x<尺寸>/apps/voidmaker.png`。二创图片不入 git。
 
 系统托盘(StatusNotifier)随桌宠自动出现:左键单击切换显隐,右键菜单含
-显隐/自动允许工具/语音连续对话/退出。需要 bar 提供托盘宿主(dms、waybar 的
+显隐/自动允许工具/主动闲聊/语音连续对话/退出;主动闲聊开关会立即生效并写回配置。
+需要 bar 提供托盘宿主(dms、waybar 的
 `tray` 模块等);没有宿主时自动跳过,仅打一行日志。
 
 ## TTS(GPT-SoVITS)

@@ -45,10 +45,9 @@
 # enabled = false
 # interval_minutes = 20.0         # 检查周期
 # cooldown_minutes = 10.0         # 两次主动发言的最小间隔
-# precheck_model = "claude-haiku-4-5"    # 先用廉价模型预判值不值得开口;"" = 关闭预判,
-                                         # Codex 可配合 precheck_reasoning_effort 指定独立推理强度
+# precheck_model = "claude-haiku-4-5"    # 先用廉价模型预判;"" = 关闭预判并直接使用主模型
 # precheck_reasoning_effort = "low"      # Codex 预判推理强度;"" = 使用 Codex CLI 配置
-                                  # 每次直接注入主模型(按周期计费,不推荐)
+# casual_chat_enabled = false     # true = 正常工作/浏览/娱乐有具体话题时也可主动闲聊
 
 [homelab]                         # 家庭服务器状态查询(homelab-hub 聚合层,只读)
 # enabled = false                 # 不在家庭网络内就保持 false

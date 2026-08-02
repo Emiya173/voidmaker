@@ -20,7 +20,7 @@ from ..perception.desktop import (
     query_focused_window,
     read_now_playing,
 )
-from ..perception.proactive import PRECHECK_PROMPT, PRECHECK_TEXT_PROMPT
+from ..perception.proactive import build_precheck_prompt, build_precheck_text_prompt
 from ..perception.screenshot import capture_focused_window
 
 
@@ -48,6 +48,7 @@ async def _image_worth_speaking(
     model: str | None,
     provider: str = "claude",
     reasoning_effort: str | None = None,
+    casual_chat_enabled: bool = False,
 ) -> bool:
     """Tier B:截聚焦窗口(失败自动回退单屏/全屏)→ haiku 图像二分类。"""
     path = await capture_focused_window()
@@ -57,11 +58,13 @@ async def _image_worth_speaking(
     finally:
         path.unlink(missing_ok=True)
 
+    prompt = build_precheck_prompt(casual_chat_enabled)
+
     if provider == "codex":
         from .codex import codex_query
 
         result = await codex_query(
-            PRECHECK_PROMPT,
+            prompt,
             model=model,
             reasoning_effort=reasoning_effort,
             image=raw_image,
@@ -85,7 +88,7 @@ async def _image_worth_speaking(
                             "data": image_data,
                         },
                     },
-                    {"type": "text", "text": PRECHECK_PROMPT},
+                    {"type": "text", "text": prompt},
                 ],
             },
             "parent_tool_use_id": None,
@@ -106,6 +109,7 @@ async def screen_worth_speaking(
     model: str | None,
     provider: str = "claude",
     reasoning_effort: str | None = None,
+    casual_chat_enabled: bool = False,
 ) -> bool:
     """分层判断是否值得主动开口。多数情况只花一次纯文本调用。"""
     try:
@@ -114,18 +118,22 @@ async def screen_worth_speaking(
         win = None  # niri 不可用:退到全屏截图路径
 
     if win is None:
-        if provider == "claude":
+        if provider == "claude" and not casual_chat_enabled:
             return await _image_worth_speaking(model)
-        if reasoning_effort is None:
+        if reasoning_effort is None and not casual_chat_enabled:
             return await _image_worth_speaking(model, provider)
-        return await _image_worth_speaking(model, provider, reasoning_effort)
+        return await _image_worth_speaking(
+            model, provider, reasoning_effort, casual_chat_enabled
+        )
 
     try:
         media = await read_now_playing()
     except Exception:
         media = None
-    prompt = PRECHECK_TEXT_PROMPT.format(
-        window=format_focused_window(win), media=format_now_playing(media)
+    prompt = build_precheck_text_prompt(
+        format_focused_window(win),
+        format_now_playing(media),
+        casual_chat_enabled,
     )
     if provider == "claude":
         verdict = await _ask_text(model, prompt)
@@ -138,8 +146,10 @@ async def screen_worth_speaking(
     if "SPEAK" in verdict:
         return True
     # LOOK(或意外输出)→ 截聚焦单屏细看
-    if provider == "claude":
+    if provider == "claude" and not casual_chat_enabled:
         return await _image_worth_speaking(model)
-    if reasoning_effort is None:
+    if reasoning_effort is None and not casual_chat_enabled:
         return await _image_worth_speaking(model, provider)
-    return await _image_worth_speaking(model, provider, reasoning_effort)
+    return await _image_worth_speaking(
+        model, provider, reasoning_effort, casual_chat_enabled
+    )

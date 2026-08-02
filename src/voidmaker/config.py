@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 from typing import Literal
@@ -12,6 +14,61 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 CONFIG_PATH = Path(os.environ.get("VOIDMAKER_CONFIG", "~/.config/voidmaker/config.toml")).expanduser()
 DATA_DIR = Path(os.environ.get("VOIDMAKER_DATA", "~/.local/share/voidmaker")).expanduser()
+
+
+def save_config_bool(
+    section: str,
+    key: str,
+    value: bool,
+    path: Path | None = None,
+) -> None:
+    """原位更新一个 TOML 布尔项,保留其他配置和行内注释。"""
+    config_path = path or CONFIG_PATH
+    original = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    lines = original.splitlines()
+    header = re.compile(rf"^\s*\[{re.escape(section)}\]\s*(?:#.*)?$")
+    next_header = re.compile(r"^\s*\[")
+    active = re.compile(
+        rf"^(\s*){re.escape(key)}\s*=\s*(?:true|false)(\s*(?:#.*)?)$"
+    )
+    commented = re.compile(
+        rf"^(\s*)#\s*{re.escape(key)}\s*=\s*(?:true|false)(\s*(?:#.*)?)$"
+    )
+    rendered = "true" if value else "false"
+
+    section_start = next((i for i, line in enumerate(lines) if header.match(line)), None)
+    if section_start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend((f"[{section}]", f"{key} = {rendered}"))
+    else:
+        section_end = next(
+            (i for i in range(section_start + 1, len(lines)) if next_header.match(lines[i])),
+            len(lines),
+        )
+        for i in range(section_start + 1, section_end):
+            match = active.match(lines[i]) or commented.match(lines[i])
+            if match:
+                lines[i] = f"{match.group(1)}{key} = {rendered}{match.group(2)}"
+                break
+        else:
+            lines.insert(section_end, f"{key} = {rendered}")
+
+    updated = "\n".join(lines) + "\n"
+    tomllib.loads(updated)  # 写盘前拒绝生成无效配置
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=config_path.parent,
+        prefix=f".{config_path.name}.",
+        delete=False,
+    ) as temporary:
+        temporary.write(updated)
+        temporary_path = Path(temporary.name)
+    if config_path.exists():
+        temporary_path.chmod(config_path.stat().st_mode)
+    temporary_path.replace(config_path)
 
 
 class SectionModel(BaseModel):
@@ -68,6 +125,8 @@ class ScreenAwarenessConfig(SectionModel):
     precheck_model: str | None = "claude-haiku-4-5"
     # Codex 预判的独立推理强度;None = 使用 Codex CLI 配置。
     precheck_reasoning_effort: str | None = None
+    # 允许在正常工作/浏览/娱乐时围绕具体屏幕内容主动闲聊。
+    casual_chat_enabled: bool = False
 
 
 class HomelabConfig(SectionModel):

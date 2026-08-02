@@ -56,6 +56,20 @@ def create_tray(window) -> QSystemTrayIcon | None:
     auto.toggled.connect(window._permissions.set_auto)
     menu.addAction(auto)
 
+    casual = QAction("主动闲聊(正常活动也可搭话)", menu)
+    casual.setCheckable(True)
+
+    def _toggle_casual(enabled: bool) -> None:
+        if window._set_casual_chat(enabled):
+            return
+        casual.blockSignals(True)
+        casual.setChecked(window._casual_chat_enabled)
+        casual.blockSignals(False)
+        tray.showMessage("VoidMaker", "保存主动闲聊设置失败,请查看日志")
+
+    casual.toggled.connect(_toggle_casual)
+    menu.addAction(casual)
+
     voice = None
     if window._transcriber is not None:
         voice = QAction("语音连续对话", menu)
@@ -69,8 +83,11 @@ def create_tray(window) -> QSystemTrayIcon | None:
 
     def _sync_checks() -> None:
         # 状态可能已被右键菜单改过;blockSignals 防 setChecked 触发一次多余 toggled
-        for action, value in ((auto, window._permissions.auto),
-                              (voice, window._voice_chat_on)):
+        for action, value in (
+            (auto, window._permissions.auto),
+            (casual, window._casual_chat_enabled),
+            (voice, window._voice_chat_on),
+        ):
             if action is None:
                 continue
             action.blockSignals(True)

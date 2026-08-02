@@ -21,17 +21,24 @@ class PrecheckWorker(QThread):
         model: str,
         provider: str = "claude",
         reasoning_effort: str | None = None,
+        casual_chat_enabled: bool = False,
         parent=None,
     ):
         super().__init__(parent)
         self._model = model
         self._provider = provider
         self._reasoning_effort = reasoning_effort
+        self._casual_chat_enabled = casual_chat_enabled
 
     def run(self) -> None:
         try:
             speak = asyncio.run(
-                screen_worth_speaking(self._model, self._provider, self._reasoning_effort)
+                screen_worth_speaking(
+                    self._model,
+                    self._provider,
+                    self._reasoning_effort,
+                    self._casual_chat_enabled,
+                )
             )
         except Exception as exc:
             print(f"[voidmaker] 主动感知预判失败(本轮沉默): {exc}", flush=True)

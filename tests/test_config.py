@@ -1,7 +1,7 @@
 import tomllib
 from pathlib import Path
 
-from voidmaker.config import AgentConfig, AppConfig, STTConfig
+from voidmaker.config import AgentConfig, AppConfig, STTConfig, save_config_bool
 
 EXAMPLE = Path(__file__).parent.parent / "docs" / "config.example.toml"
 
@@ -51,12 +51,14 @@ def test_screen_precheck_can_use_independent_reasoning_effort():
             "screen_awareness": {
                 "precheck_model": "gpt-5.6-luna",
                 "precheck_reasoning_effort": "low",
+                "casual_chat_enabled": True,
             },
         }
     )
     assert cfg.agent.reasoning_effort == "medium"
     assert cfg.screen_awareness.precheck_model == "gpt-5.6-luna"
     assert cfg.screen_awareness.precheck_reasoning_effort == "low"
+    assert cfg.screen_awareness.casual_chat_enabled is True
 
 
 def test_example_config_parses_and_validates():
@@ -69,3 +71,25 @@ def test_example_config_parses_and_validates():
         for line in text.splitlines()
     )
     AppConfig.model_validate(tomllib.loads(uncommented))
+
+
+def test_save_config_bool_preserves_comments_and_other_values(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        "[agent]\nmodel = \"m\"\n\n[screen_awareness]\n"
+        "# casual_chat_enabled = false  # 主动闲聊\ninterval_minutes = 3.0\n",
+        encoding="utf-8",
+    )
+
+    save_config_bool("screen_awareness", "casual_chat_enabled", True, path)
+    text = path.read_text(encoding="utf-8")
+    parsed = tomllib.loads(text)
+    assert parsed["agent"]["model"] == "m"
+    assert parsed["screen_awareness"]["interval_minutes"] == 3.0
+    assert parsed["screen_awareness"]["casual_chat_enabled"] is True
+    assert "casual_chat_enabled = true  # 主动闲聊" in text
+
+    save_config_bool("screen_awareness", "casual_chat_enabled", False, path)
+    assert tomllib.loads(path.read_text(encoding="utf-8"))["screen_awareness"][
+        "casual_chat_enabled"
+    ] is False
