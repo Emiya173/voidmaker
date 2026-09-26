@@ -1,287 +1,110 @@
 # VoidMaker
 
-桌面角色 AI 助手:角色包驱动、主动屏幕感知、Claude Agent SDK / Codex 双后端。
-参考项目:[Rvosy/sakura](https://github.com/Rvosy/sakura),
-主要继承其角色包格式(`.char` / `character.json`)与分段双语回复协议;agent 内核与 UI 全部重写。
+面向 **NixOS + niri + Quickshell** 的 AI 语音助手，正在从 Python 桌宠全面重构为 TypeScript 应用。
+完整目标与选型见 [重构计划](docs/VOICE_ASSISTANT_PLAN.md)。
 
-## 快速开始(NixOS)
+## 当前可用范围
 
-```sh
-nix develop        # 建 venv 并 uv sync,进入后自动激活
-python -m voidmaker --cli   # 终端对话原型
-pytest             # 跑测试
-```
+- 独立 TypeScript Host，经 Unix socket 连接新的 Quickshell 界面。
+- Codex App Server 文字对话、最终回复流、停止生成和权限确认。
+- PostgreSQL 保存消息与 Codex 线程引用，Host/UI 重启后恢复历史。
+- 纯函数对话状态机、协议校验、数据库迁移与回归测试。
 
-主对话后端可选:
+ASR、TTS、声学插话、角色动画、后台 Work 任务和桌面感知仍在后续阶段。
+`src/voidmaker/` 是待迁移/删除的旧 Python 实现；新入口不依赖它，也不保证旧 UI 或配置兼容。
 
-- Claude(默认):Claude Code CLI 已登录,由 Claude Agent SDK 驱动。
-- Codex:Codex CLI 已安装并完成 `codex login`,由 `codex app-server` 驱动。
+当前仅提供一个聊天会话，界面加载最近 200 条消息；审批在内存中保存并于 60 秒后默认拒绝。
+Codex 子进程故障后需重启 Host。持久任务恢复、历史分页和事件游标将在后续阶段补齐。
 
-在 `~/.config/voidmaker/config.toml` 切换:
-
-```toml
-[agent]
-provider = "codex"
-model = ""              # 使用 Codex CLI 默认模型;也可填可用的 Codex 模型
-reasoning_effort = ""   # 使用 Codex CLI 配置;也可填 low/medium/high/xhigh
-auxiliary_model = ""    # 记忆整理使用 CLI 默认模型
-```
-
-Codex 后端使用临时 app-server thread、只读命令沙箱和现有权限确认 UI;桌宠内置
-工具通过 dynamic tools 接入。需要支持该协议的较新 Codex CLI。
-
-## 部署
-
-以个人桌面环境(NixOS + niri)举例，实际应该没有硬性的发行版要求.
-
-**前置**:NixOS + niri/Wayland;Claude Code CLI 或 Codex CLI 至少一个已登录;可选 GPT-SoVITS(TTS,
-见下)、麦克风(语音输入)。可复现性:`flake.lock` 钉死 nixpkgs、`uv.lock` 锁定
-Python 依赖,`nix develop` 重建即可(需联网拉 wheel)。
-
-1. **获取与环境**
-   ```sh
-   git clone https://github.com/Emiya173/voidmaker && cd voidmaker
-   nix develop        # 自动 uv sync 到 .venv 并激活
-   ```
-
-2. **角色包与图标**:立绘/语音是二创资产,**不入库**(格式见
-   `characters/README.md`);没有角色包也能跑,默认界面不会显示占位立绘。
-   [Release](https://github.com/Emiya173/voidmaker/releases) 附件提供打包好的
-   资产 `voidmaker-assets-<日期>.tar.zst`(含 sakura 角色包 + 立绘版图标,
-   附 sha256),一键装好:
-   ```sh
-   mkdir -p /tmp/voidmaker-assets
-   tar --zstd -xf voidmaker-assets-*.tar.zst -C /tmp/voidmaker-assets
-   /tmp/voidmaker-assets/install.sh ~/dev/voidmaker   # 参数 = 仓库路径
-   ```
-
-3. **配置(均可选,不建文件用默认值)**:`~/.config/voidmaker/config.toml`——
-   全部字段带注释的模板见 `docs/config.example.toml`,TTS / 语音输入 / 家庭服务器
-   各节另见下文对应章节;homelab 拓扑参考放 `~/.config/voidmaker/homelab.md`
-   (模板 `docs/homelab.example.md`)。这些含个人地址/资产的文件都在仓库外,不进 git。
-
-4. **运行**
-   ```sh
-   python -m voidmaker             # Quickshell 两级桌宠 UI(默认)
-   python -m voidmaker --classic   # 旧 PySide6 窗口(兼容模式)
-   python -m voidmaker --services  # 先拉起 TTS/STT 服务再启动(见「随桌宠拉起服务」)
-   python -m voidmaker --cli       # 终端对话
-   python -m voidmaker --admin     # 本地管理后台
-   ```
-
-5. **niri 集成**:默认 UI 由 Quickshell layer-shell 固定在右侧,不需要窗口定位规则;
-   快捷键 binds 见下一节;
-   工作区图标/托盘见「桌面集成」。
-
-## niri 配置
-
-默认界面有两级：第一级只显示固定在右下角的立绘和临时气泡；悬停立绘会出现
-「输入 / 截图 / 隐藏」操作。左键立绘或再次运行 `python -m voidmaker` 可展开
-第二级侧栏，包含对话、权限确认、语音、截图和记事。`Esc` 或再次点击立绘可
-收起侧栏。气泡区域不参与第一级鼠标命中，显示/消失也不改变立绘位置。
-右键点击立绘也可在第一级打开简洁输入框，或运行
-`python -m voidmaker --compose`；输入后按 Enter 发送，`Esc` 关闭。
-一级、二级都可截图；框选时整个界面暂时隐藏，完成后恢复原状态。
-点击「隐藏」或运行 `python -m voidmaker --hide` 会隐藏整个界面并保留后台会话；
-再次运行 `python -m voidmaker` 会先唤回一级。`--capture` 可从快捷键直接框选。
-没有配置角色立绘时不会显示占位立绘。截图缩略图显示在对话消息中。
-Quickshell 使用 layer-shell 屏幕锚点，不需要 niri
-`window-rule`。如需旧窗口，可运行 `python -m voidmaker --classic`，并为它配置:
-
-```kdl
-window-rule {
-    match app-id="voidmaker"
-    excludes title="VoidMaker 记事本"
-    open-floating true
-    default-floating-position x=32 y=32 relative-to="bottom-right"
-    // 以下覆盖全局装饰(dms 等预设的圆角/阴影/边框会给透明窗口描出实心卡片感)
-    draw-border-with-background false
-    border { off; }
-    focus-ring { off; }
-    shadow { off; }
-    geometry-corner-radius 0
-    clip-to-geometry false
-}
-```
-
-旧窗口规则需放在任何全局 window-rule 之后(同属性后者覆盖前者)。
-调试旧窗口:`VOIDMAKER_UI_TEST=blank|circle` 可渲染空白帧/红圆测试帧。
-
-### 快捷键启/停(不自启)
-
-桌宠不随桌面自启,由快捷键控制,进程常驻。快捷键在一级与二级间切换；立绘
-隐藏后再次按键会先唤回一级。对话历史与提示词缓存保留。Quickshell 的输入
-区域只覆盖立绘和当前显示的操作控件，气泡消失后上方区域不会拦截桌面点击。
-
-在 niri 配置的 `binds { ... }` 里加两个键:
-
-```kdl
-binds {
-    // 首次按启动第一级；再次按展开 / 收起第二级
-    Mod+Shift+P { spawn "nix" "develop" "--command" "python" "-m" "voidmaker"; }
-    // 在第一级直接输入，不展开功能侧栏
-    Mod+Shift+Return { spawn "nix" "develop" "--command" "python" "-m" "voidmaker" "--compose"; }
-    // 任何状态下隐藏界面，下一次 Mod+Shift+P 唤回一级
-    Mod+Shift+H { spawn "nix" "develop" "--command" "python" "-m" "voidmaker" "--hide"; }
-    // 从一级或二级直接进入框选
-    Mod+Shift+S { spawn "nix" "develop" "--command" "python" "-m" "voidmaker" "--capture"; }
-    // 释放退出(结束进程,下次 Mod+Shift+P 重新启动)
-    Mod+Shift+O { spawn "nix" "develop" "--command" "python" "-m" "voidmaker" "--quit"; }
-}
-```
-
-`spawn` 的工作目录需为本仓库(或把 `python -m voidmaker` 换成绝对路径的
-启动脚本)。启动键靠单例检测:已有实例时新进程只发一条切换命令随即退出。
-
-默认界面的 `show_notepad` 在侧栏「记事」页显示。旧窗口模式仍使用独立信息窗，
-如需单独定位可配置:
-
-```kdl
-window-rule {
-    match app-id="voidmaker" title="VoidMaker 记事本"
-    open-floating true
-    default-column-width { proportion 0.5; }
-}
-```
-
-## 桌面集成(工作区图标与系统托盘)
-
-Wayland 下窗口图标由桌面按 app-id(`voidmaker`)解析同名 desktop entry 得到,
-装一次即可让 niri overview / 任务切换器显示图标:
+## 开发环境
 
 ```sh
-mkdir -p ~/.local/share/icons/hicolor/scalable/apps
-cp src/voidmaker/assets/voidmaker.svg ~/.local/share/icons/hicolor/scalable/apps/
-cp docs/voidmaker.desktop ~/.local/share/applications/   # Exec 按注释改成自己的启动方式
+nix develop
+pnpm install
+pnpm check
+pnpm test
+pnpm build
 ```
 
-想用自定义图标(如角色立绘版):PNG 放 `src/voidmaker/assets/voidmaker.png`
-(窗口/启动器)和 `src/voidmaker/assets/tray/<尺寸>.png`(托盘,16-32px 各档),
-存在即优先于内置 SVG;主题侧把各尺寸装进
-`~/.local/share/icons/hicolor/<尺寸>x<尺寸>/apps/voidmaker.png`。二创图片不入 git。
+Codex CLI 需单独安装并登录，当前协议验证版本为 `codex-cli 0.156.1`。
+本项目使用 `codex app-server` 本地 stdio JSON-RPC；[官方接口说明](https://learn.chatgpt.com/docs/app-server)。
 
-系统托盘(StatusNotifier)随桌宠自动出现:左键单击切换界面显隐,右键菜单含
-显隐/自动允许工具/主动闲聊/语音连续对话/退出;主动闲聊开关会立即生效并写回配置。
-需要 bar 提供托盘宿主(dms、waybar 的
-`tray` 模块等);没有宿主时自动跳过,仅打一行日志。
+## PostgreSQL
 
-## TTS(GPT-SoVITS)
+Host 仅使用 PostgreSQL，启动时运行 `db/migrations/` 中尚未应用的 SQL。连接设置使用标准的
+`PGHOST`、`PGPORT`、`PGUSER`、`PGDATABASE` 环境变量，或 `DATABASE_URL`。
+数据库不可用时启动失败，不会切换到文件数据库。
 
-推理/训练在独立仓库运行(当前:`~/dev/gpt-sovits`,ROCm/9070XT),
-本项目只调其 HTTP API。启动推理服务:
+如已有本机 PostgreSQL，创建专用数据库/角色后配置连接即可。开发时也可启动仅监听用户 Unix socket 的实例：
 
 ```sh
-cd ~/dev/gpt-sovits && nix develop --command \
-  python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
+mkdir -p "$HOME/.local/state/voidmaker" "$XDG_RUNTIME_DIR/voidmaker-postgres"
+initdb -D "$HOME/.local/state/voidmaker/postgres" --auth-local=trust --auth-host=scram-sha-256
+pg_ctl -D "$HOME/.local/state/voidmaker/postgres" \
+  -l "$HOME/.local/state/voidmaker/postgres.log" \
+  -o "-k $XDG_RUNTIME_DIR/voidmaker-postgres -c listen_addresses=''" start
+export PGHOST="$XDG_RUNTIME_DIR/voidmaker-postgres"
+export PGDATABASE=voidmaker
+createdb voidmaker
+pnpm db:migrate
 ```
 
-在 `~/.config/voidmaker/config.toml` 配置:
+`initdb` 和 `createdb` 仅首次执行；已有数据目录不要重新初始化。生产使用时应在 NixOS 中声明本机
+PostgreSQL 服务、专用数据库角色与备份策略。连接凭据只放用户配置，不提交到仓库。
 
-```toml
-[tts]
-enabled = true
-api_url = "http://127.0.0.1:9880/tts"
+## 运行
 
-[tts.params]
-text_lang = "ja"
-ref_audio_path = "/path/to/ref.wav"
-prompt_lang = "ja"
-```
-
-将来迁移到其他推理机器时只需改 `api_url`。
-
-## 语音输入与连续对话
-
-语音输入走 pw-record + faster-whisper(CPU int8,懒加载),开箱即用、零配置。
-两种用法:
-
-- **单次**:点 🎤 开始/结束录音,识别结果填入输入条供确认。
-- **连续对话**:右键菜单勾选"语音连续对话"(或 `VOIDMAKER_VOICE_CHAT=1` 启动),
-  持续拾音、能量 VAD 自动断句、识别后直接发送;她说话/思考期间自动暂停拾音
-  (半双工,防自回授),空闲后恢复。点 🎤(👂)退出该模式。
-
-### 可选:whisper.cpp GPU 服务
-
-与 TTS 同一模式:转写服务独立运行,本项目只发 HTTP。faster-whisper 的 GPU 端
-只支持 CUDA,AMD 卡走 whisper.cpp 的 Vulkan 后端(nixpkgs 包
-`whisper-cpp.override { vulkanSupport = true; }`,经 RADV 不依赖 ROCm),
-能跑更大的模型换更高的中文准确率(实测 RX 9070 + large-v3-turbo,
-十几秒音频 0.2s 出结果,约为 CPU small 的 10 倍)。
+在配置好 PostgreSQL 连接的终端启动 Host：
 
 ```sh
-whisper-server -m models/ggml-large-v3-turbo-q5_0.bin --host 127.0.0.1 --port 9881
+pnpm dev:host
+# 或 pnpm build 后：
+pnpm start:host
 ```
 
-```toml
-[stt]
-server_url = "http://127.0.0.1:9881"   # 不设或服务不在线 → 自动回退进程内 CPU 转写
-```
-
-### 可选:随桌宠拉起服务
-
-懒得手动开两个服务的话,给 TTS/STT 配上启动命令,用 `--services` 启动:
-
-```toml
-[tts]
-start_command = "cd ~/dev/gpt-sovits && nix develop --command python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml"
-
-[stt]
-start_command = "cd ~/dev/whisper-cpp && nix develop -c ./serve.sh"
-```
+另一个终端启动 UI：
 
 ```sh
-python -m voidmaker --services   # 探测端口,没在线的才拉起;拉起后不等就绪
+quickshell --path apps/shell/shell.qml
 ```
 
-服务 detached 运行、退出桌宠不回收(冷启动贵,留给下次);预热期间 TTS 静默、
-STT 走 CPU 回退。服务日志在 `~/.local/state/voidmaker/<name>-server.log`。
+Host 的 socket 默认在 `$XDG_RUNTIME_DIR/voidmaker/host.sock`，也可通过 `VOIDMAKER_SOCKET` 覆盖。
+UI 重载或退出不会停止 Host。普通聊天线程使用只读沙箱；需要进一步权限时在 UI 中允许或拒绝。
+聊天工作目录为 `$XDG_STATE_HOME/voidmaker/chat`（默认 `~/.local/state/voidmaker/chat`），
+避免把应用源码目录作为日常聊天上下文。Codex 仍使用当前用户的登录与全局配置。
+全局快捷键和位置由 niri 配置；新面板使用 layer-shell 屏幕锚点。
 
-## 家庭服务器状态(可选)
+[systemd 用户服务模板](docs/voidmaker-host.service)可用于常驻运行，安装前需按实际仓库目录调整
+`WorkingDirectory`，并在 `~/.config/voidmaker/host.env` 设置数据库连接。模板不会自动安装或启用。
 
-若在家庭网络内、且部署了 homelab-hub 聚合层,她能查家里服务器的实时状态
-(Jellyfin/相册/下载/追番)。在 `~/.config/voidmaker/config.toml` 配置:
-
-```toml
-[homelab]
-enabled = true                            # 不在家里的网络就设 false
-hub_url = "http://<你的内网主机>:<端口>"   # homelab-hub /rk 端点(只读,无鉴权)
-```
-
-拓扑参考(角色回答「家里网络怎么连的/某服务网址」用)放本地文件
-`~/.config/voidmaker/homelab.md`,格式见 `docs/homelab.example.md`。内网地址/
-服务清单属个人基础设施信息,不入代码库。
-
-连不上时工具优雅降级(回"暂时连不上"),不影响其他功能。只读,不做任何控制;
-密码库等敏感服务不接入。
-
-## 管理后台
-
-浏览器里查/改设置、看聊天日志、查/编辑记忆与权限,不必翻文件或走对话:
+## 验证
 
 ```sh
-python -m voidmaker --admin     # 打开 http://127.0.0.1:8760
-# VOIDMAKER_ADMIN_ADDR=127.0.0.1:9000 可改地址
+pnpm check
+pnpm test
+pnpm build
 ```
 
-标准库 http.server 实现(零依赖),**只绑 127.0.0.1**——能改配置/记忆/权限属敏感
-操作,不暴露到网络。设置保存前用 pydantic 校验;改配置需重启桌宠生效。
+数据库集成测试使用专门的测试数据库：
 
-## 角色包
-
-`characters/<id>/character.json` + 立绘资源。立绘/语音为二创资产,**不入 git**
-(见 .gitignore),仓库只保留格式文档与加载器。从 sakura Release 下载 `.char`
-后解压到 `characters/` 即可。
-
-## 项目结构
-
+```sh
+createdb voidmaker_test
+VOIDMAKER_TEST_DATABASE_URL="postgresql:///voidmaker_test?host=$PGHOST" pnpm test
 ```
-src/voidmaker/
-├─ agent/        # Claude/Codex 后端 + 分段回复协议 + 预判/记忆整理子 agent
-├─ backchannel.py# 快速接话:规则分类 + 模板轮换(等待期 filler)
-├─ character/    # 角色包加载(兼容 sakura 格式)
-├─ perception/   # 截图 / 屏幕感知(grim / portal)
-├─ voice/        # GPT-SoVITS HTTP 客户端 + mpv 播放(段内流式)
-├─ ui/           # Quickshell 界面、PySide6 桥接与旧桌宠窗口
-└─ storage/      # JSONL 聊天历史 + 跨会话记忆文件
-docs/PLAN.md     # 重构计划全文
+
+未设置 `VOIDMAKER_TEST_DATABASE_URL` 时，数据库测试会跳过。Codex 协议测试使用本地假服务，
+不会访问模型或消耗额度；真实 Codex 和 Quickshell 链路另做实机验收。
+
+## 代码组织
+
+```text
+apps/host/          TypeScript Host 与数据库迁移入口
+apps/shell/         Quickshell/QML 界面
+packages/contracts/ UI/Host 协议与 schema
+packages/domain/    纯状态转移与领域规则
+packages/adapters/  Codex、PostgreSQL 等副作用边界
+db/migrations/      PostgreSQL SQL 迁移
+tests/*.test.ts     TypeScript 单元/集成测试
 ```
+
+角色素材、参考音频和模型权重不入库。本地模型服务保持独立环境；Python 仅用于确实需要它的模型推理。

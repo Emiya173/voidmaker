@@ -1,0 +1,15 @@
+[Unit]
+Description=VoidMaker TypeScript assistant host
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/VoidMaker
+EnvironmentFile=-%h/.config/voidmaker/host.env
+ExecStart=/run/current-system/sw/bin/nix develop --command node dist/apps/host/src/main.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical-session.target

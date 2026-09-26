@@ -5,6 +5,8 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 dist/
+node_modules/
+coverage/
 
 # nix
 result
