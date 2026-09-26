@@ -20,6 +20,7 @@
           grim
           slurp
           git
+          bubblewrap
         ];
 
         shellHook = ''

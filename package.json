@@ -12,7 +12,8 @@
     "dev:host": "tsx apps/host/src/main.ts",
     "start:host": "node dist/apps/host/src/main.js",
     "db:migrate": "tsx apps/host/src/migrate.ts",
-    "asr:evaluate": "tsx apps/tools/src/asr-evaluate.ts"
+    "asr:evaluate": "tsx apps/tools/src/asr-evaluate.ts",
+    "work:smoke": "tsx apps/tools/src/work-smoke.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.44.0",

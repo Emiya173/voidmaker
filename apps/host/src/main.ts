@@ -3,16 +3,19 @@ import { chmod, mkdir, unlink } from "node:fs/promises";
 import { createConnection, createServer, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { inspectArtifact, projectPath } from "../../../packages/adapters/src/artifacts.js";
 import { captureAudio, playAudio } from "../../../packages/adapters/src/audio-process.js";
 import { CodexAppServer } from "../../../packages/adapters/src/codex.js";
 import { Database, DEFAULT_SESSION_ID } from "../../../packages/adapters/src/database.js";
 import { synthesize, transcribe } from "../../../packages/adapters/src/speech-http.js";
+import { WorkStore } from "../../../packages/adapters/src/work-store.js";
 import { clientCommand, PROTOCOL_VERSION, type ServerEvent } from "../../../packages/contracts/src/protocol.js";
 import type { VoiceConfig } from "../../../packages/contracts/src/voice.js";
 import { type ConversationState, initialConversation, transition } from "../../../packages/domain/src/conversation.js";
 import { loadVoiceConfig } from "./config.js";
 import { migrate } from "./migrate.js";
 import { VoiceController } from "./voice.js";
+import { WorkManager } from "./work.js";
 
 const MAX_LINE_BYTES = 64 * 1024;
 const runtimeDirectory = process.env.XDG_RUNTIME_DIR;
@@ -40,12 +43,21 @@ class Host {
   private threadId = "";
   private readonly codex: CodexAppServer;
   private readonly voice: VoiceController;
+  private readonly work: WorkManager;
 
   constructor(
     private readonly database: Database,
     chatDirectory: string,
     voiceConfig: VoiceConfig,
   ) {
+    this.work = new WorkManager(
+      new WorkStore(process.env.DATABASE_URL),
+      (id) => this.broadcast({ type: "work_changed", id }),
+      (message) => {
+        console.error("后台任务:", message);
+        this.broadcast({ type: "error", message });
+      },
+    );
     this.codex = new CodexAppServer((method, params) => this.askApproval(method, params), chatDirectory);
     this.voice = new VoiceController(
       {
@@ -68,6 +80,7 @@ class Host {
   }
 
   async start(): Promise<void> {
+    await this.work.start();
     const oldThread = await this.database.ensureSession();
     await this.codex.start();
     this.threadId = await this.codex.startThread(oldThread);
@@ -79,6 +92,8 @@ class Host {
     for (const client of this.clients) client.destroy();
     await this.voice.cancel();
     await this.codex.close();
+    await this.work.close();
+    await this.work.store.close();
   }
 
   attach(client: Socket): void {
@@ -135,6 +150,48 @@ class Host {
         for (const [requestId, approval] of this.approvals) {
           this.send(client, { type: "approval", requestId, description: approval.description });
         }
+        this.send(client, { type: "work_list", ...(await this.work.store.list()) });
+        return;
+      }
+      case "project_add":
+        await this.work.store.addProject(command.name, await projectPath(command.path));
+        this.broadcast({ type: "work_changed", id: "" });
+        return;
+      case "work_list":
+        this.send(client, { type: "work_list", ...(await this.work.store.list()) });
+        return;
+      case "work_get":
+        this.send(client, { type: "work_detail", detail: await this.work.store.detail(command.id) });
+        return;
+      case "work_draft":
+        await this.work.store.draft(command.id, command.projectId, command.prompt);
+        this.send(client, { type: "work_saved", id: command.id });
+        this.broadcast({ type: "work_changed", id: command.id });
+        return;
+      case "work_edit":
+        await this.work.store.edit(command.id, command.revision, command.prompt);
+        this.broadcast({ type: "work_changed", id: command.id });
+        return;
+      case "work_submit":
+      case "work_retry":
+        await this.work.enqueue(command.id, command.revision, command.type === "work_retry");
+        return;
+      case "work_cancel":
+        await this.work.cancel(command.id);
+        return;
+      case "work_approval":
+        await this.work.decide(command.id, command.decision);
+        return;
+      case "artifact_open": {
+        const { artifact, project } = await this.work.store.findArtifact(command.id);
+        const verified = await inspectArtifact(project.path, artifact.path);
+        if (verified.artifact.sha256 !== artifact.sha256) throw new Error("文件已在任务后发生变化，不能作为原产物查看");
+        this.send(client, {
+          type: "artifact_preview",
+          path: artifact.path,
+          text: verified.preview,
+          sha256: artifact.sha256,
+        });
         return;
       }
       case "send":

@@ -38,9 +38,10 @@ ShellRoot {
     function receive(line) {
         let event
         try { event = JSON.parse(line) } catch (error) { return }
+        workPanel.receive(event)
         switch (event.type) {
         case "snapshot":
-            if (event.version !== 2) { errorText = "界面与服务协议版本不匹配"; return }
+            if (event.version !== 3) { errorText = "界面与服务协议版本不匹配"; return }
             messages.clear()
             for (const message of event.messages) messages.append({ role: message.role, content: message.text })
             status = event.status
@@ -67,7 +68,7 @@ ShellRoot {
         connected: true
         parser: SplitParser { onRead: line => root.receive(line) }
         onConnectedChanged: {
-            if (connected) { root.errorText = ""; root.send({ type: "hello", version: 2 }) }
+            if (connected) { root.errorText = ""; root.send({ type: "hello", version: 3 }); if (workPanel.selectedId) root.send({type: "work_get", id: workPanel.selectedId}) }
             else { root.status = "offline"; root.approvalId = ""; root.voice = null }
         }
     }
@@ -76,8 +77,8 @@ ShellRoot {
 
     PanelWindow {
         anchors { right: true; bottom: true }
-        implicitWidth: 470
-        implicitHeight: 760
+        implicitWidth: 540
+        implicitHeight: 860
         color: "#171b27"
         exclusionMode: ExclusionMode.Ignore
         focusable: true
@@ -92,73 +93,119 @@ ShellRoot {
                     : root.status === "thinking" ? "回复中" : "待命"; color: "#9dddbf" }
             }
             Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: "#343b50" }
-            ListView {
-                id: conversation
+            TabBar {
+                id: tabs
                 Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                spacing: 10
-                model: messages
-                delegate: Rectangle {
-                    required property string role
-                    required property string content
-                    width: conversation.width
-                    height: body.implicitHeight + 24
-                    radius: 10
-                    color: role === "user" ? "#344363" : "#272e3f"
-                    Text {
-                        id: body
-                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
-                        text: parent.content
-                        textFormat: Text.PlainText
-                        wrapMode: Text.Wrap
-                        color: "#f1f2f7"
-                        font.pixelSize: 14
-                    }
-                }
-                footer: Rectangle {
-                    width: conversation.width
-                    height: root.draft ? draftText.implicitHeight + 24 : 0
-                    radius: 10
-                    color: "#272e3f"
-                    visible: root.draft.length > 0
-                    Text {
-                        id: draftText
-                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
-                        text: root.draft
-                        textFormat: Text.PlainText
-                        wrapMode: Text.Wrap
-                        color: "#f1f2f7"
-                        font.pixelSize: 14
-                    }
-                }
+                TabButton { text: "对话" }
+                TabButton { text: "后台任务" + (workPanel.works.some(w => w.status === "awaiting_permission") ? " · 待审批" : "") }
             }
-            Rectangle {
-                Layout.fillWidth: true
-                implicitHeight: 190
-                visible: root.approvalId.length > 0
-                color: "#47393e"
-                radius: 8
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    Text { text: "Codex 请求权限"; color: "#fff0e6"; font.bold: true }
-                    ScrollView {
-                        Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-                        TextArea { text: root.approvalText; textFormat: TextEdit.PlainText; readOnly: true
-                            wrapMode: TextEdit.Wrap; color: "#eee0df"; background: null }
-                    }
-                    RowLayout {
-                        Button { text: "拒绝"; onClicked: root.send({ type: "approval", requestId: root.approvalId, decision: "decline" }) }
-                        Button { text: "允许一次"; onClicked: root.send({ type: "approval", requestId: root.approvalId, decision: "accept" }) }
-                    }
-                }
-            }
-            VoiceControls {
-                Layout.fillWidth: true
-                snapshot: root.voice
-                chatIdle: root.status === "idle"
+            WorkPanel {
+                id: workPanel
+                Layout.fillWidth: true; Layout.fillHeight: true
+                visible: tabs.currentIndex === 1
+                online: root.status !== "offline"
                 onCommand: value => root.send(value)
+            }
+            ColumnLayout {
+                Layout.fillWidth: true; Layout.fillHeight: true
+                visible: tabs.currentIndex === 0
+                ListView {
+                    id: conversation
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    spacing: 10
+                    model: messages
+                    delegate: Rectangle {
+                        required property string role
+                        required property string content
+                        width: conversation.width
+                        height: body.implicitHeight + 24
+                        radius: 10
+                        color: role === "user" ? "#344363" : "#272e3f"
+                        Text {
+                            id: body
+                            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
+                            text: parent.content
+                            textFormat: Text.PlainText
+                            wrapMode: Text.Wrap
+                            color: "#f1f2f7"
+                            font.pixelSize: 14
+                        }
+                    }
+                    footer: Rectangle {
+                        width: conversation.width
+                        height: root.draft ? draftText.implicitHeight + 24 : 0
+                        radius: 10
+                        color: "#272e3f"
+                        visible: root.draft.length > 0
+                        Text {
+                            id: draftText
+                            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
+                            text: root.draft
+                            textFormat: Text.PlainText
+                            wrapMode: Text.Wrap
+                            color: "#f1f2f7"
+                            font.pixelSize: 14
+                        }
+                    }
+                }
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: 190
+                    visible: root.approvalId.length > 0
+                    color: "#47393e"
+                    radius: 8
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        Text { text: "Codex 请求权限"; color: "#fff0e6"; font.bold: true }
+                        ScrollView {
+                            Layout.fillWidth: true; Layout.fillHeight: true; clip: true
+                            TextArea { text: root.approvalText; textFormat: TextEdit.PlainText; readOnly: true
+                                wrapMode: TextEdit.Wrap; color: "#eee0df"; background: null }
+                        }
+                        RowLayout {
+                            Button { text: "拒绝"; onClicked: root.send({ type: "approval", requestId: root.approvalId, decision: "decline" }) }
+                            Button { text: "允许一次"; onClicked: root.send({ type: "approval", requestId: root.approvalId, decision: "accept" }) }
+                        }
+                    }
+                }
+                Button {
+                    text: "将输入转为任务草稿"
+                    enabled: input.text.trim().length > 0
+                    onClicked: { workPanel.useTranscript(input.text.trim()); tabs.currentIndex = 1 }
+                }
+                VoiceControls {
+                    Layout.fillWidth: true
+                    snapshot: root.voice
+                    chatIdle: root.status === "idle"
+                    onCommand: value => root.send(value)
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    ScrollView {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 66
+                        TextArea {
+                            id: input
+                            placeholderText: "输入文字或更正转写"
+                            textFormat: TextEdit.PlainText
+                            wrapMode: TextEdit.Wrap
+                            enabled: root.canSend
+                            Keys.onReturnPressed: event => {
+                                if (!(event.modifiers & Qt.ShiftModifier)) { root.submit(); event.accepted = true }
+                                else event.accepted = false
+                            }
+                        }
+                    }
+                    Button { text: "发送"; enabled: root.canSend && input.text.trim().length > 0; onClicked: root.submit() }
+                    Button {
+                        text: "停止"
+                        enabled: root.status === "thinking" || (!!root.voice && root.voice.phase !== "idle")
+                        onClicked: root.send({ type: "stop" })
+                    }
+                }
             }
             Text {
                 Layout.fillWidth: true
@@ -168,30 +215,6 @@ ShellRoot {
                 color: "#f5a5a5"
                 wrapMode: Text.Wrap
                 maximumLineCount: 3
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                ScrollView {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 66
-                    TextArea {
-                        id: input
-                        placeholderText: "输入文字或更正转写"
-                        textFormat: TextEdit.PlainText
-                        wrapMode: TextEdit.Wrap
-                        enabled: root.canSend
-                        Keys.onReturnPressed: event => {
-                            if (!(event.modifiers & Qt.ShiftModifier)) { root.submit(); event.accepted = true }
-                            else event.accepted = false
-                        }
-                    }
-                }
-                Button { text: "发送"; enabled: root.canSend && input.text.trim().length > 0; onClicked: root.submit() }
-                Button {
-                    text: "停止"
-                    enabled: root.status === "thinking" || (!!root.voice && root.voice.phase !== "idle")
-                    onClicked: root.send({ type: "stop" })
-                }
             }
         }
     }

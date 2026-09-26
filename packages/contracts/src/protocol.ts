@@ -1,9 +1,11 @@
 import { z } from "zod";
 import type { VoiceSnapshot } from "./voice.js";
+import { type Project, type WorkDetail, type WorkItem, workCommands } from "./work.js";
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export const clientCommand = z.discriminatedUnion("type", [
+  ...workCommands,
   z.object({ type: z.literal("hello"), version: z.literal(PROTOCOL_VERSION) }),
   z.object({ type: z.literal("send"), text: z.string().trim().min(1).max(10_000) }),
   z.object({ type: z.literal("stop") }),
@@ -41,4 +43,9 @@ export type ServerEvent =
   | { type: "status"; status: "idle" | "thinking" | "stopping" }
   | { type: "approval"; requestId: string; description: string }
   | { type: "approval_closed"; requestId: string }
+  | { type: "work_list"; projects: Project[]; works: WorkItem[] }
+  | { type: "work_detail"; detail: WorkDetail }
+  | { type: "work_changed"; id: string }
+  | { type: "work_saved"; id: string }
+  | { type: "artifact_preview"; path: string; text: string; sha256: string }
   | { type: "error"; message: string };

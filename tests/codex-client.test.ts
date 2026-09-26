@@ -18,6 +18,29 @@ afterEach(async () => {
 });
 
 describe("Codex App Server transport", () => {
+  it("isolates work policy and forwards progress without changing the chat default", async () => {
+    const events: string[] = [];
+    const instance = new CodexAppServer(
+      async () => "decline",
+      process.cwd(),
+      process.execPath,
+      [join(process.cwd(), "tests/fixtures/fake-codex.mjs")],
+      { work: true, onEvent: (method) => events.push(method) },
+    );
+    clients.push(instance);
+    await instance.start();
+    const thread = await instance.startThread();
+    const policy = JSON.parse(await instance.run(thread, "policy", () => undefined));
+    expect(policy.threadParams.sandbox).toBe("workspace-write");
+    expect(policy.threadParams.config.mcp_servers.test.enabled).toBe(false);
+    expect(policy.threadParams.config.apps.test.enabled).toBe(false);
+    expect(policy.turnParams.sandboxPolicy.networkAccess).toBe(false);
+    expect(policy.turnParams.sandboxPolicy.writableRoots).toEqual([process.cwd()]);
+    expect(policy.turnParams.approvalsReviewer).toBe("user");
+    expect(policy.turnParams.outputSchema.required).toContain("outcome");
+    expect(events).toContain("turn/started");
+    expect(events).toContain("turn/completed");
+  });
   it("streams the final message without mixing commentary", async () => {
     const instance = await client();
     const threadId = await instance.startThread();

@@ -18,6 +18,8 @@ Keep local inference systems outside this repository, with their own pinned envi
 - `pnpm install --frozen-lockfile`: install locked dependencies.
 - `pnpm check`: TypeScript and Biome checks.
 - `pnpm test`: regression tests; set `VOIDMAKER_TEST_DATABASE_URL` to a dedicated PostgreSQL test database for DB coverage.
+- `VOIDMAKER_HOST_TEST_DATABASE_URL`: use a second, separate test database for Host crash/recovery IPC tests.
+- `pnpm work:smoke`: opt-in real Codex task in a temporary project; run separately from DB tests, without microphone use.
 - `pnpm build`: compile the application.
 - `pnpm dev:host` / `pnpm start:host`: development / compiled Host.
 - `quickshell --path apps/shell/shell.qml`: active UI.

@@ -3,12 +3,15 @@ import { createInterface } from "node:readline";
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const notify = (method, params) => send({ method, params });
 let turnId = 0;
+let threadParams;
 const complete = (status = "completed") => notify("turn/completed", { threadId: "thread", turn: { id: String(turnId), status } });
 
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   if (message.method === "initialize") send({ id: message.id, result: {} });
+  if (message.method === "config/read") send({ id: message.id, result: { config: { mcp_servers: { test: { enabled: true } }, apps: { test: { enabled: true } } } } });
   if (message.method === "thread/start" || message.method === "thread/resume") {
+    threadParams = message.params;
     send({ id: message.id, result: { thread: { id: "thread" } } });
   }
   if (message.method === "turn/start") {
@@ -16,8 +19,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     send({ id: message.id, result: { turn: { id: String(turnId) } } });
     if (message.params.input[0].text === "crash") process.exit(2);
     if (message.params.input[0].text === "wait") return;
+    if (message.params.input[0].text === "policy") {
+      notify("item/completed", { threadId: "thread", turnId: String(turnId), item: { type: "agentMessage", phase: "final_answer", text: JSON.stringify({threadParams, turnParams: message.params}) } });
+      complete();
+      return;
+    }
     if (message.params.input[0].text === "approval") {
-      send({ id: "approval-1", method: "item/commandExecution/requestApproval", params: { command: "echo test" } });
+      send({ id: "approval-1", method: "item/commandExecution/requestApproval", params: { threadId: "thread", turnId: String(turnId), command: "echo test" } });
       return;
     }
     const params = { threadId: "thread", turnId: String(turnId) };
