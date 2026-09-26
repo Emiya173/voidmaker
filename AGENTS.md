@@ -1,33 +1,44 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Structure and architecture
 
-VoidMaker is a Python 3.12 desktop assistant using a `src` layout. Application code lives in `src/voidmaker/`: `agent/` contains Claude and Codex backend integration, `ui/` the PySide6 desktop interface, `voice/` speech clients, `perception/` screen and homelab inputs, `character/` character loading, and `storage/` persistence. Tests are in `tests/` and generally mirror features rather than package paths. Documentation and sample configuration live in `docs/`; `characters/` documents the character-pack format, but copyrighted portrait and voice assets must not be committed.
+VoidMaker targets NixOS + niri + Quickshell. The active application is TypeScript:
+`apps/host/` composes effects, `apps/shell/` contains declarative QML views, `apps/tools/` contains developer tools,
+`packages/domain/` contains pure immutable transitions and rules, `packages/contracts/` owns protocol/config schemas,
+and `packages/adapters/` contains database, Codex, HTTP and process boundaries. PostgreSQL migrations live in
+`db/migrations/`. Tests are in `tests/*.test.ts`; docs and sample configuration are in `docs/`.
 
-## Build, Test, and Development Commands
+`src/voidmaker/`, Python tests, `pyproject.toml` and `uv.lock` are legacy reference material pending removal.
+Do not add new application logic or compatibility layers there. No Claude or Whisper integration in the new application.
+Keep local inference systems outside this repository, with their own pinned environments, and communicate over HTTP.
 
-- `nix develop`: create/sync `.venv` from `uv.lock`, install development dependencies, and activate the reproducible shell.
-- `python -m voidmaker`: run the desktop UI.
-- `python -m voidmaker --cli`: run the terminal conversation client.
-- `python -m voidmaker --admin`: run the local administration UI.
-- `pytest`: execute the full test suite.
-- `pytest tests/test_reply.py`: run one focused test module.
-- `ruff check src tests`: lint production and test code.
+## Commands and verification
 
-Manage dependencies through `pyproject.toml` and `uv.lock`; do not use ad hoc `pip install`. Keep inference systems such as GPT-SoVITS outside this repository and access them over HTTP.
+- `nix develop`: reproducible Node/pnpm, PostgreSQL, Quickshell and audio tools.
+- `pnpm install --frozen-lockfile`: install locked dependencies.
+- `pnpm check`: TypeScript and Biome checks.
+- `pnpm test`: regression tests; set `VOIDMAKER_TEST_DATABASE_URL` to a dedicated PostgreSQL test database for DB coverage.
+- `pnpm build`: compile the application.
+- `pnpm dev:host` / `pnpm start:host`: development / compiled Host.
+- `quickshell --path apps/shell/shell.qml`: active UI.
+- `VOIDMAKER_AUDIO_SMOKE=1 pnpm test tests/audio-process.test.ts`: real mpv IPC with null audio output.
 
-## Coding Style & Naming Conventions
+Validate meaningful failure/cancellation paths after agent or voice changes. Live model/device acceptance must be
+reported separately from fake-service tests. Do not activate the microphone as part of unattended automated tests.
+For any remaining Python edits, use the locked legacy environment and run `ruff check src tests` and relevant pytest tests.
 
-Use four-space indentation, type annotations for public interfaces, and a 120-character maximum line length. Follow standard Python naming: `snake_case` for modules, functions, and variables; `PascalCase` for classes; `UPPER_SNAKE_CASE` for constants. Keep UI work in `ui/`, external-service boundaries in dedicated clients, and LLM entry points under `agent/`. Run Ruff before submitting.
+## Style and boundaries
 
-## Testing Guidelines
+Use strict TypeScript, ESM imports, two-space indentation and Biome formatting. Prefer discriminated unions,
+readonly data, pure functions and declarative QML bindings. Keep business state in the Host/domain, not QML controls.
+Carry generation IDs and AbortSignals across async operations; stale completions must not resurrect cancelled work.
+Do not introduce inheritance hierarchies for domain behavior. Validate external data at service boundaries.
 
-Tests use pytest with `pytest-asyncio` in automatic mode. Name files `test_<feature>.py` and tests `test_<behavior>`. Add regression coverage for bug fixes and exercise failure/fallback paths, especially reply parsing, permissions, IPC, and optional services. After agent-flow changes, also validate one conversation with `python -m voidmaker --cli`.
+## Changes and platform constraints
 
-## Commit & Pull Request Guidelines
-
-Recent commits use short, imperative Chinese subjects prefixed by the affected area, such as `UI:...`, `修复:...`, `配置:...`, or `STT:...`. Keep each commit focused. Pull requests should explain user-visible behavior, list verification commands, link relevant issues, and include screenshots or recordings for UI changes. Call out configuration, dependency, or Wayland-specific impacts explicitly.
-
-## Security & Platform Constraints
-
-Never commit local configuration, internal network addresses, chat data, or character assets. The admin server must remain bound to localhost. Preserve Wayland/niri behavior: window placement belongs in compositor rules, not application-side positioning or always-on-top flags.
+Use focused commits with short imperative Chinese subjects such as `语音:接入本地识别与播放` or `修复:清理取消的轮次`.
+Summarize user-visible behavior, checks, remaining acceptance gaps and configuration/Wayland impacts.
+Never commit local configuration, internal network addresses, recordings, chat data, model weights or character assets.
+Admin/model HTTP listeners must remain on loopback; UI IPC uses a private Unix socket.
+Keep niri window placement in compositor rules. Quickshell panels may use layer-shell anchors; do not add
+application-side positioning or always-on-top flags for ordinary windows.

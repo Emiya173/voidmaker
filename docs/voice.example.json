@@ -1,0 +1,21 @@
+{
+  "vad": {
+    "threshold": 0.015,
+    "silenceMs": 800,
+    "minSpeechMs": 240,
+    "maxRecordingMs": 30000
+  },
+  "asr": {
+    "url": "http://127.0.0.1:8000/v1/audio/transcriptions",
+    "model": "Qwen/Qwen3-ASR-0.6B",
+    "timeoutMs": 60000
+  },
+  "tts": {
+    "url": "http://127.0.0.1:9880/tts",
+    "refAudioPath": "/absolute/path/to/reference.wav",
+    "promptText": "替换为参考录音中的准确文本",
+    "promptLanguage": "zh",
+    "textLanguage": "auto",
+    "timeoutMs": 120000
+  }
+}

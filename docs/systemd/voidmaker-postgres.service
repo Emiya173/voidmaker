@@ -1,0 +1,16 @@
+[Unit]
+Description=VoidMaker private PostgreSQL
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/VoidMaker
+RuntimeDirectory=voidmaker-postgres
+RuntimeDirectoryMode=0700
+ExecStart=/run/current-system/sw/bin/nix develop --command postgres -D %h/.local/state/voidmaker/postgres -k %t/voidmaker-postgres -c listen_addresses=
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+[Install]
+WantedBy=default.target

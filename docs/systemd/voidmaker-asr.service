@@ -1,0 +1,17 @@
+[Unit]
+Description=VoidMaker Qwen3-ASR-0.6B ROCm inference
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/qwen3-asr-service
+Environment=QWEN_MODEL_PATH=%h/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-0.6B/snapshots/5eb144179a02acc5e5ba31e748d22b0cf3e303b0
+Environment=HF_HUB_OFFLINE=1
+Environment=TOKENIZERS_PARALLELISM=false
+ExecStart=/run/current-system/sw/bin/nix develop --command .venv/bin/python -m uvicorn server:app --host 127.0.0.1 --port 8000 --no-access-log
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

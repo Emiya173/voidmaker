@@ -1,15 +1,18 @@
 [Unit]
-Description=VoidMaker TypeScript assistant host
-After=graphical-session.target
+Description=VoidMaker TypeScript assistant Host
+Requires=voidmaker-postgres.service
+After=voidmaker-postgres.service graphical-session.target
+Wants=voidmaker-asr.service voidmaker-tts.service
 
 [Service]
 Type=simple
 WorkingDirectory=%h/dev/VoidMaker
-EnvironmentFile=-%h/.config/voidmaker/host.env
+Environment=PGHOST=%t/voidmaker-postgres
+Environment=PGDATABASE=voidmaker
 ExecStart=/run/current-system/sw/bin/nix develop --command node dist/apps/host/src/main.js
 Restart=on-failure
-RestartSec=5
-TimeoutStopSec=10
+RestartSec=3
+TimeoutStopSec=30
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=default.target

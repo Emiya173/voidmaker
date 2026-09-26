@@ -1,6 +1,6 @@
 # VoidMaker AI 语音助手全面重构计划
 
-> 修订日期：2026-09-26。目标环境：NixOS + niri + Quickshell。本文是目标架构和实施计划，新增功能尚未实现。
+> 修订日期：2026-09-26。目标环境：NixOS + niri + Quickshell。本文包含目标架构与实施计划，当前完成情况见第 8 节。
 
 ## 1. 重构决策
 
@@ -23,7 +23,7 @@ VoidMaker 将以 [Amadeus 的 Talk / Embody / Act / Control](https://github.com/
 | --- | --- | --- |
 | 文字与角色对话 | Python Claude/Codex 双后端、角色卡、分段回复 | TypeScript Host + Codex App Server；显式会话、轮次、结构化事件和可取消生成 |
 | 语音输入 | `pw-record`、能量 VAD、Whisper 系列；连续对话为半双工 | PipeWire 采集 + 独立本地 ASR 服务；可编辑转写、连续对话、设备与错误状态可见 |
-| ASR 质量 | faster-whisper CPU / whisper.cpp Vulkan | 不再以 Whisper 为默认或兜底；比较 Qwen3-ASR、Paraformer 和 SenseVoice，在目标机器与真实语料上选型 |
+| ASR 质量 | faster-whisper CPU / whisper.cpp Vulkan | 选用 Qwen3-ASR-0.6B；在目标机器上验收识别质量和时延，无 Whisper 回退 |
 | 合成与播放 | Python 调外部 GPT-SoVITS，mpv 播放 | TypeScript 控制外部 TTS 与播放器；统一播放时钟、字幕、口型、停止和错误回收 |
 | 打断 | 暂停拾音防回授，缺统一取消链路 | 首先提供停止键与半双工可靠取消；通过 AEC/VAD 实测后支持说话时插话 |
 | 角色表现 | 静态立绘、字幕和语气参考音 | Quickshell 声明式状态视图；实际 PCM 播放驱动口型、表情和字幕时间线 |
@@ -36,9 +36,11 @@ VoidMaker 将以 [Amadeus 的 Talk / Embody / Act / Control](https://github.com/
 
 **明确不移植**：Electron/React、Win32/WorkerW/Lively 壁纸、CUDA cu124 配置、Amadeus 的 SpriteForge/PixiJS、VN Player。旧 PySide6 UI、Claude SDK、Whisper 主路径和 Python 应用 Host 会在切换后移除。
 
-## 3. ASR 选型：先评测，再确定默认模型
+## 3. ASR 选型：Qwen3-ASR-0.6B
 
-候选均以本地服务形式部署，TypeScript 只使用统一的 `transcribe` / `stream` 协议；模型推理可以是 Python、C++ 或其他独立运行时。服务仅绑定本机，模型权重不进仓库。
+用户已明确选用 **Qwen3-ASR-0.6B**，作为当前唯一计划部署的 ASR 模型。以下候选表保留为选型背景，其他模型不属于本阶段必做项。
+
+ASR 以本地服务形式部署，TypeScript 只使用统一的 `transcribe` / `stream` 协议；模型推理可以是 Python、C++ 或其他独立运行时。服务仅绑定本机，模型权重不进仓库。
 
 | 候选 | 适用点 | 实施注意 |
 | --- | --- | --- |
@@ -46,7 +48,7 @@ VoidMaker 将以 [Amadeus 的 Talk / Embody / Act / Control](https://github.com/
 | [Paraformer 中文流式模型](https://github.com/modelscope/FunASR/blob/main/model_zoo/readme_zh.md) | 低延迟实时字幕候选，可比较热词/专名表现 | 流式与离线模型是不同契约；需实测端点检测、标点、断句与长句质量 |
 | [SenseVoiceSmall](https://github.com/QwenAudio/SenseVoice) | 中文及多语种对话候选，兼具情感/音频事件标签 | 评估 CPU/GPU 推理速度与本机部署方式；情感标签不能直接当作角色表情事实 |
 
-阶段 0 录制经用户许可的测试集，覆盖普通话口语、中英日混说、角色名/项目名、远场、键盘声、扬声器回声和静音。至少记录字符错误率、专名命中率、首个稳定转写延迟、句末延迟、实时系数、显存/内存和失败率。用现有 Whisper 结果作比较基线，但不保留它作为新系统的自动回退。默认模型与备选模型由同一机器上的结果决定；如离线质量与流式延迟难兼得，可选“流式草稿 + 句末高质量复核”，但只有在实测确有收益时才引入双模型。
+阶段 0 录制经用户许可的测试集，覆盖普通话口语、中英日混说、角色名/项目名、远场、键盘声、扬声器回声和静音。至少记录字符错误率、专名命中率、首个稳定转写延迟、句末延迟、实时系数、显存/内存和失败率。用现有 Whisper 结果作比较基线，但不保留它作为新系统的自动回退。当前默认模型已经确定，同机评测用于验收质量、延迟与资源占用；如离线质量与流式延迟难兼得，可选“流式草稿 + 句末高质量复核”，但只有在实测确有收益时才引入双模型。
 
 ## 4. 目标技术栈
 
@@ -122,7 +124,7 @@ Codex App Server 要完成 `initialize` / `initialized` 握手，解析流式通
 
 - 固定目标机器的 niri、Quickshell、PipeWire、GPU 和 PostgreSQL 环境记录；建立 ASR 测试集和同机评测脚本。
 - 产出协议 schema、领域状态图、数据库草图、Codex App Server 最小 TS 连接原型。
-- **验收**：Qwen3-ASR、Paraformer、SenseVoice 至少各有一条可重复的本机推理路径与实测指标；确定首选和备选 ASR，写明未达标项。
+- **验收**：Qwen3-ASR-0.6B 具备可重复的本机推理路径与实测指标，写明未达标项；其他模型的对照评测为可选项。
 
 ### 阶段 1：TypeScript 核心与新 Quickshell UI
 
@@ -161,7 +163,7 @@ Codex App Server 要完成 `initialize` / `initialized` 握手，解析流式通
 
 | 风险 | 处理规则 |
 | --- | --- |
-| Qwen3-ASR 流式服务在目标 GPU 上不可用或过慢 | 基于阶段 0 实测改用 Paraformer/SenseVoice；不把“模型宣传支持流式”当成本机验收 |
+| Qwen3-ASR 流式服务在目标 GPU 上不可用或过慢 | 先验证 Qwen3-ASR-0.6B 的离线半双工路径，按实测调整后端与资源配置；更换模型需重新评估 |
 | Codex 用作角色聊天时延迟或费用较高 | 测量首字/整轮延迟、token 用量与缓存行为；优化上下文和分段策略，不私自增加第二个 Agent 后端 |
 | Quickshell/Host 连接断开 | Host 独立运行；UI 重连请求数据库快照和事件游标，显示明确离线状态 |
 | PostgreSQL 不可用 | 主服务拒绝写入与工作执行并报告数据库状态；使用本机受限角色和定期备份，不写隐式文件回退 |
@@ -170,7 +172,7 @@ Codex App Server 要完成 `initialize` / `initialized` 握手，解析流式通
 | 引入参考代码和角色资产 | Amadeus 第一方代码使用 [AGPL-3.0](https://github.com/Code-Amadeus/Amadeus/blob/main/LICENSE)，资产另有权利边界。按功能重新实现；若直接复制代码，先确定发布许可与来源义务；资产和权重不入库 |
 
 每阶段以可运行用户旅程、失败路径和真实设备结果验收。当前分支已开始落地 Codex TS 链路，
-阶段 0 的 ASR 同机评测仍待执行，语音模型选型尚未最终确定。
+阶段 0 的 ASR 同机评测仍待执行；用户已确定选用 Qwen3-ASR-0.6B。
 
 ## 8. 实施记录（2026-09-26）
 
@@ -178,7 +180,7 @@ Codex App Server 要完成 `initialize` / `initialized` 握手，解析流式通
 Codex App Server 客户端与纯函数对话状态机。已实测文字流式回复、停止后再次对话、Host 重启历史恢复，
 并验证 QML 可在当前桌面加载。新增协议和数据库回归测试，Nix 开发环境改为 TS 工具栈。
 
-当前仅完成阶段 1 的基础文字链路。ASR 同机评测尚未开展；语音、持久审批/任务账本、角色表现、桌面感知和
+首次实施完成阶段 1 的基础文字链路。ASR 同机评测尚未开展；持久审批/任务账本、角色表现、桌面感知和
 旧实现清理继续按后续阶段推进。旧 Python 代码暂留作功能参考，不是新应用的运行依赖。
 
 本轮验证：`pnpm check`、`pnpm build`、Ruff 通过；启用真实 PostgreSQL 集成测试后，
@@ -187,3 +189,27 @@ Codex App Server 客户端与纯函数对话状态机。已实测文字流式回
 
 当前限制：单会话、最近 200 条历史、内存审批（60 秒超时拒绝）；尚未实现事件游标与持久任务账本，
 Codex 子进程异常后需要重启 Host。聊天目录已独立到 XDG state 目录，继续使用用户的 Codex 登录与全局配置。
+
+### 阶段 2：语音工程链路（等待模型与设备验收）
+
+已接入 TS PipeWire 录音、能量端点检测、显式本地 ASR transcription API、GPT-SoVITS 非流式分句合成和 mpv 播放。
+新增可编辑转写、半双工连续模式、进度/PCM 音量事件及全阶段取消；异步事件通过 generation 丢弃过期结果。
+UI 协议升级至 v2，新增 VoiceControls 声明式组件；无语音配置时保留文字对话。
+
+新增同机评测工具，输出 CER、专名召回率、RTF、延迟和失败率；没有录音样本或模型服务，因此没有编造评测结果。
+该阶段开始时用户没有现成服务，先完成代码、自动测试与部署说明；当时已确定默认 ASR 为 Qwen3-ASR-0.6B，尚未部署模型、
+验证真实说话/朗读、实现声学插话或角色口型。详见 [语音接入与验收](VOICE_SETUP.md)。
+
+本轮验证：7 个测试文件共 24 项通过（包含 PostgreSQL 和实际 mpv 空输出），类型检查、构建、Ruff 通过。
+编译后 Host 实测未配置 ASR 时明确报错，随后仍可完成真实 Codex 文字对话；新 QML 可加载。
+ASR 评测 CLI 通过假 HTTP 服务跑通报告生成，测试报告已清理，不将该结果作为模型质量数据。
+
+### 本地部署与现有音频实机验收
+
+已部署 Qwen3-ASR-0.6B 的独立 Transformers/ROCm 服务，锁定模型 revision 与依赖；
+ASR、TTS、PostgreSQL、Host 和 Quickshell 均由 systemd 用户服务管理并启用。
+通过官方中文样本、混合语音合成样本与静音测试，完成真实 Codex 回复、扬声器播放、中断及再次对话。
+用户确认播放清晰正常；原日语 TTS 权重的中文回环异常，当前改用通用预训练权重并保留原配置。
+
+用户明确选择暂不录制麦克风，因此真人识别、VAD 和连续对话声学表现仍待验收，声学插话仍未实现。
+量化结果、失败样本限制和服务操作见 [部署验收报告](DEPLOYMENT_ACCEPTANCE.md)。

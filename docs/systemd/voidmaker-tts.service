@@ -1,0 +1,14 @@
+[Unit]
+Description=VoidMaker GPT-SoVITS local speech synthesis
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/gpt-sovits
+ExecStart=/run/current-system/sw/bin/nix develop --command .venv/bin/python api_v2.py -a 127.0.0.1 -p 9880 -c %h/.config/voidmaker/tts-infer.yaml
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

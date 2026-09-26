@@ -8,9 +8,13 @@
 - 独立 TypeScript Host，经 Unix socket 连接新的 Quickshell 界面。
 - Codex App Server 文字对话、最终回复流、停止生成和权限确认。
 - PostgreSQL 保存消息与 Codex 线程引用，Host/UI 重启后恢复历史。
-- 纯函数对话状态机、协议校验、数据库迁移与回归测试。
+- 纯函数对话/语音状态机、协议校验、数据库迁移与回归测试。
+- PipeWire 录音、可编辑 ASR 转写、GPT-SoVITS 按句朗读、半双工连续对话与取消控制。
 
-ASR、TTS、声学插话、角色动画、后台 Work 任务和桌面感知仍在后续阶段。
+ASR 选用 **Qwen3-ASR-0.6B**，TTS 使用 GPT-SoVITS，均需单独部署本地模型服务。
+当前机器已完成本地部署、现有音频识别和实际播放验收；真人麦克风与连续对话验收仍待进行。
+服务操作与实测数据见 [部署验收报告](docs/DEPLOYMENT_ACCEPTANCE.md)。
+部署、配置和评测见 [语音接入说明](docs/VOICE_SETUP.md)。声学插话、角色动画、后台 Work 任务和桌面感知仍待实现。
 `src/voidmaker/` 是待迁移/删除的旧 Python 实现；新入口不依赖它，也不保证旧 UI 或配置兼容。
 
 当前仅提供一个聊天会话，界面加载最近 200 条消息；审批在内存中保存并于 60 秒后默认拒绝。
@@ -69,7 +73,7 @@ quickshell --path apps/shell/shell.qml
 ```
 
 Host 的 socket 默认在 `$XDG_RUNTIME_DIR/voidmaker/host.sock`，也可通过 `VOIDMAKER_SOCKET` 覆盖。
-UI 重载或退出不会停止 Host。普通聊天线程使用只读沙箱；需要进一步权限时在 UI 中允许或拒绝。
+UI 重载或退出不会停止 Host；最后一个 UI 断开时停止语音并退出连续模式。普通聊天线程使用只读沙箱；需要进一步权限时在 UI 中允许或拒绝。
 聊天工作目录为 `$XDG_STATE_HOME/voidmaker/chat`（默认 `~/.local/state/voidmaker/chat`），
 避免把应用源码目录作为日常聊天上下文。Codex 仍使用当前用户的登录与全局配置。
 全局快捷键和位置由 niri 配置；新面板使用 layer-shell 屏幕锚点。
@@ -100,6 +104,7 @@ VOIDMAKER_TEST_DATABASE_URL="postgresql:///voidmaker_test?host=$PGHOST" pnpm tes
 ```text
 apps/host/          TypeScript Host 与数据库迁移入口
 apps/shell/         Quickshell/QML 界面
+apps/tools/         ASR 同机评测工具
 packages/contracts/ UI/Host 协议与 schema
 packages/domain/    纯状态转移与领域规则
 packages/adapters/  Codex、PostgreSQL 等副作用边界
