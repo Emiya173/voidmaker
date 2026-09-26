@@ -53,7 +53,7 @@ def create_tray(window) -> QSystemTrayIcon | None:
 
     auto = QAction("自动允许工具(不再确认)", menu)
     auto.setCheckable(True)
-    auto.toggled.connect(window._permissions.set_auto)
+    auto.toggled.connect(getattr(window, "_set_auto_permissions", window._permissions.set_auto))
     menu.addAction(auto)
 
     casual = QAction("主动闲聊(正常活动也可搭话)", menu)

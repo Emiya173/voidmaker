@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
 from PySide6.QtCore import Qt
@@ -16,6 +17,11 @@ from .tray import app_icon, create_tray
 
 
 def run_app(cfg: AppConfig) -> int:
+    # PySide6 wheel 自带 Qt。宿主 Qt 插件路径/主题/样式可能加载另一版本的插件，
+    # 在 QApplication 初始化时导致原生崩溃（例如 NixOS 的 qt6ct + kvantum）。
+    for name in ("QT_PLUGIN_PATH", "QT_QPA_PLATFORMTHEME", "QT_STYLE_OVERRIDE"):
+        os.environ.pop(name, None)
+
     # 分数缩放(如 niri 1.5x)用 PassThrough,不向上取整到 2x:立绘/字幕按真实
     # dpr 像素级渲染,更锐。必须在 QApplication 创建前设置。
     QApplication.setHighDpiScaleFactorRoundingPolicy(

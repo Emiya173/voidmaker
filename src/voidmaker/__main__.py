@@ -118,6 +118,11 @@ def main() -> None:
     parser.add_argument("--cli", action="store_true", help="终端对话原型(不启动 UI)")
     parser.add_argument("--admin", action="store_true", help="启动本地管理后台(设置/日志/记忆/权限)")
     parser.add_argument("--quit", action="store_true", help="退出正在运行的桌宠实例(快捷键释放用)")
+    parser.add_argument("--classic", action="store_true", help="使用旧 PySide6 桌宠窗口")
+    parser.add_argument("--compose", action="store_true", help="在第一级打开简洁的对话输入框")
+    parser.add_argument("--hide", action="store_true", help="隐藏立绘并保留后台会话")
+    parser.add_argument("--capture", action="store_true", help="隐藏界面并框选截图")
+    parser.add_argument("--bridge", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--services", action="store_true",
         help="启动前拉起未在线的 TTS/STT 服务(需在 config.toml 配 start_command)",
@@ -144,11 +149,26 @@ def main() -> None:
         run_admin(host or "127.0.0.1", int(port or "8760"))
     elif args.cli:
         asyncio.run(cli_chat())
-    else:
-        # 延迟导入:--cli 路径不加载 Qt
+    elif args.bridge:
+        from .ui.shell_bridge import run_bridge
+
+        sys.exit(run_bridge(load_config()))
+    elif args.classic:
         from .ui.app import run_app
 
         sys.exit(run_app(load_config()))
+    elif args.compose:
+        from .ui.shell_launcher import show_compose
+
+        sys.exit(show_compose())
+    elif args.hide or args.capture:
+        from .ui.shell_launcher import shell_action
+
+        sys.exit(shell_action("hide" if args.hide else "capture"))
+    else:
+        from .ui.shell_launcher import launch_shell
+
+        sys.exit(launch_shell())
 
 
 if __name__ == "__main__":

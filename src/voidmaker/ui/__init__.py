@@ -6,5 +6,6 @@
 - agent_worker.py   QThread + asyncio 桥接 CharacterAgent
 - app.py            应用入口(app-id=voidmaker)
 
-后续:框选截图按钮、点击穿透/锚定需求时立绘层抽 layer-shell。
+默认界面由 quickshell/shell.qml 呈现,通过 shell_bridge.py 复用后台控制器。
+旧 PySide6 窗口保留为 --classic 兼容模式。
 """

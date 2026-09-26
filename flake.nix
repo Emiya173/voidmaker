@@ -39,6 +39,7 @@
           uv
           ruff
           git
+          quickshell
           # 屏幕感知(niri 支持 wlr-screencopy → grim 可用;不行则换 xdg-desktop-portal)
           grim
           slurp
@@ -54,6 +55,8 @@
           unset PYTHONPATH
           # wayland 优先,失败回退 xcb
           export QT_QPA_PLATFORM="wayland;xcb"
+          # PySide6 wheel 自带 Qt 插件；宿主 qt6ct/kvantum 插件与其混用会在 QApplication 初始化时崩溃
+          unset QT_PLUGIN_PATH QT_QPA_PLATFORMTHEME QT_STYLE_OVERRIDE
 
           export UV_PROJECT_ENVIRONMENT=.venv
           if [ -f uv.lock ]; then
@@ -64,7 +67,7 @@
           . "$UV_PROJECT_ENVIRONMENT/bin/activate"
 
           echo "VoidMaker dev shell ready."
-          echo "  桌宠 UI:    python -m voidmaker            (--services 先拉起 TTS/STT)"
+          echo "  Quickshell: python -m voidmaker            (--classic 使用旧窗口)"
           echo "  终端对话:   python -m voidmaker --cli"
           echo "  管理后台:   python -m voidmaker --admin"
           echo "  测试/lint:  pytest / ruff check src tests"

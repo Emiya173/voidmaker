@@ -80,7 +80,7 @@ class PetWindow(QWidget):
         self._bubble_hide_ms = int(max(cfg.ui.bubble_hide_seconds, 0) * 1000)
         self._bubble_hide_timer = QTimer(self)
         self._bubble_hide_timer.setSingleShot(True)
-        self._bubble_hide_timer.timeout.connect(self._bubble.hide)
+        self._bubble_hide_timer.timeout.connect(self._hide_bubble)
 
         self._portrait = PortraitWidget(card, self)
 
@@ -320,7 +320,7 @@ class PetWindow(QWidget):
         self._portrait.set_portrait_for(template.portrait, template.tone)
         self._portrait.pulse()
         if self._bubble_enabled:
-            self._bubble.start(variant.zh or variant.ja)
+            self._show_bubble_text(variant.zh or variant.ja)
 
     def _on_segment(self, seg: ReplySegment) -> None:
         self._bc_timer.stop()
@@ -568,7 +568,7 @@ class PetWindow(QWidget):
         if has_audio:
             self._voice.play(seq)
         if self._bubble_enabled:
-            self._bubble.start(seg.zh or seg.ja)
+            self._show_bubble_text(seg.zh or seg.ja)
         elif not has_audio:
             QTimer.singleShot(0, self._maybe_advance)  # 无字幕也无语音,直接推进
 
@@ -639,6 +639,12 @@ class PetWindow(QWidget):
         # 否则拿到缓存旧值,setFixedSize 原地踏步
         self.layout().invalidate()
         self.setFixedSize(self.layout().sizeHint())
+
+    def _show_bubble_text(self, text: str) -> None:
+        self._bubble.start(text)
+
+    def _hide_bubble(self) -> None:
+        self._bubble.hide()
 
     def _set_input_bar_visible(self, visible: bool) -> None:
         if visible == self._input_bar.isVisibleTo(self):

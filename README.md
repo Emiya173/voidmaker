@@ -45,7 +45,7 @@ Python 依赖,`nix develop` 重建即可(需联网拉 wheel)。
    ```
 
 2. **角色包与图标**:立绘/语音是二创资产,**不入库**(格式见
-   `characters/README.md`);没有角色包也能跑,显示占位立绘。
+   `characters/README.md`);没有角色包也能跑,默认界面不会显示占位立绘。
    [Release](https://github.com/Emiya173/voidmaker/releases) 附件提供打包好的
    资产 `voidmaker-assets-<日期>.tar.zst`(含 sakura 角色包 + 立绘版图标,
    附 sha256),一键装好:
@@ -62,18 +62,31 @@ Python 依赖,`nix develop` 重建即可(需联网拉 wheel)。
 
 4. **运行**
    ```sh
-   python -m voidmaker             # 桌宠 UI(默认)
+   python -m voidmaker             # Quickshell 两级桌宠 UI(默认)
+   python -m voidmaker --classic   # 旧 PySide6 窗口(兼容模式)
    python -m voidmaker --services  # 先拉起 TTS/STT 服务再启动(见「随桌宠拉起服务」)
    python -m voidmaker --cli       # 终端对话
    python -m voidmaker --admin     # 本地管理后台
    ```
 
-5. **niri 集成**:窗口定位靠 window-rule、启停靠快捷键 binds——见下一节;
+5. **niri 集成**:默认 UI 由 Quickshell layer-shell 固定在右侧,不需要窗口定位规则;
+   快捷键 binds 见下一节;
    工作区图标/托盘见「桌面集成」。
 
 ## niri 配置
 
-桌宠窗口在 Wayland 下不能自我定位/置顶,交给 niri window-rule:
+默认界面有两级：第一级只显示固定在右下角的立绘和临时气泡；悬停立绘会出现
+「输入 / 截图 / 隐藏」操作。左键立绘或再次运行 `python -m voidmaker` 可展开
+第二级侧栏，包含对话、权限确认、语音、截图和记事。`Esc` 或再次点击立绘可
+收起侧栏。气泡区域不参与第一级鼠标命中，显示/消失也不改变立绘位置。
+右键点击立绘也可在第一级打开简洁输入框，或运行
+`python -m voidmaker --compose`；输入后按 Enter 发送，`Esc` 关闭。
+一级、二级都可截图；框选时整个界面暂时隐藏，完成后恢复原状态。
+点击「隐藏」或运行 `python -m voidmaker --hide` 会隐藏整个界面并保留后台会话；
+再次运行 `python -m voidmaker` 会先唤回一级。`--capture` 可从快捷键直接框选。
+没有配置角色立绘时不会显示占位立绘。截图缩略图显示在对话消息中。
+Quickshell 使用 layer-shell 屏幕锚点，不需要 niri
+`window-rule`。如需旧窗口，可运行 `python -m voidmaker --classic`，并为它配置:
 
 ```kdl
 window-rule {
@@ -91,22 +104,27 @@ window-rule {
 }
 ```
 
-注意:此规则需放在任何全局 window-rule 之后(同属性后者覆盖前者)。
-调试:`VOIDMAKER_UI_TEST=blank|circle` 可渲染空白帧/红圆测试帧,用于排查透明合成问题。
+旧窗口规则需放在任何全局 window-rule 之后(同属性后者覆盖前者)。
+调试旧窗口:`VOIDMAKER_UI_TEST=blank|circle` 可渲染空白帧/红圆测试帧。
 
 ### 快捷键启/停(不自启)
 
-桌宠不随桌面自启,由快捷键控制,进程常驻——收起时只是隐藏窗口,对话历史与
-提示词缓存都保留,再唤出即刻可用。(注:透明区点击穿透在 niri 上不可行——niri
-对普通 xdg 窗口只按几何矩形做命中,透明区会激活顶层窗口而非穿透到下层;唯一
-能穿透的是 wlr-layer-shell surface,但那需要整套切到 nixpkgs 的 Qt,权衡后未采用。)
+桌宠不随桌面自启,由快捷键控制,进程常驻。快捷键在一级与二级间切换；立绘
+隐藏后再次按键会先唤回一级。对话历史与提示词缓存保留。Quickshell 的输入
+区域只覆盖立绘和当前显示的操作控件，气泡消失后上方区域不会拦截桌面点击。
 
 在 niri 配置的 `binds { ... }` 里加两个键:
 
 ```kdl
 binds {
-    // 唤出 / 收起(首次按启动;已在运行则切换显隐)
+    // 首次按启动第一级；再次按展开 / 收起第二级
     Mod+Shift+P { spawn "nix" "develop" "--command" "python" "-m" "voidmaker"; }
+    // 在第一级直接输入，不展开功能侧栏
+    Mod+Shift+Return { spawn "nix" "develop" "--command" "python" "-m" "voidmaker" "--compose"; }
+    // 任何状态下隐藏界面，下一次 Mod+Shift+P 唤回一级
+    Mod+Shift+H { spawn "nix" "develop" "--command" "python" "-m" "voidmaker" "--hide"; }
+    // 从一级或二级直接进入框选
+    Mod+Shift+S { spawn "nix" "develop" "--command" "python" "-m" "voidmaker" "--capture"; }
     // 释放退出(结束进程,下次 Mod+Shift+P 重新启动)
     Mod+Shift+O { spawn "nix" "develop" "--command" "python" "-m" "voidmaker" "--quit"; }
 }
@@ -115,8 +133,8 @@ binds {
 `spawn` 的工作目录需为本仓库(或把 `python -m voidmaker` 换成绝对路径的
 启动脚本)。启动键靠单例检测:已有实例时新进程只发一条切换命令随即退出。
 
-记事窗口(show_notepad 工具弹出的独立信息窗)与桌宠同 app-id,靠 title 前缀区分。
-桌宠规则建议收紧为 `match app-id="voidmaker" title="^VoidMaker$"`,并给记事窗单独定位:
+默认界面的 `show_notepad` 在侧栏「记事」页显示。旧窗口模式仍使用独立信息窗，
+如需单独定位可配置:
 
 ```kdl
 window-rule {
@@ -142,7 +160,7 @@ cp docs/voidmaker.desktop ~/.local/share/applications/   # Exec 按注释改成�
 存在即优先于内置 SVG;主题侧把各尺寸装进
 `~/.local/share/icons/hicolor/<尺寸>x<尺寸>/apps/voidmaker.png`。二创图片不入 git。
 
-系统托盘(StatusNotifier)随桌宠自动出现:左键单击切换显隐,右键菜单含
+系统托盘(StatusNotifier)随桌宠自动出现:左键单击切换界面显隐,右键菜单含
 显隐/自动允许工具/主动闲聊/语音连续对话/退出;主动闲聊开关会立即生效并写回配置。
 需要 bar 提供托盘宿主(dms、waybar 的
 `tray` 模块等);没有宿主时自动跳过,仅打一行日志。
@@ -263,7 +281,7 @@ src/voidmaker/
 ├─ character/    # 角色包加载(兼容 sakura 格式)
 ├─ perception/   # 截图 / 屏幕感知(grim / portal)
 ├─ voice/        # GPT-SoVITS HTTP 客户端 + mpv 播放(段内流式)
-├─ ui/           # PySide6 桌宠窗口(气泡/立绘/输入条 + 各后台 worker)
+├─ ui/           # Quickshell 界面、PySide6 桥接与旧桌宠窗口
 └─ storage/      # JSONL 聊天历史 + 跨会话记忆文件
 docs/PLAN.md     # 重构计划全文
 ```
