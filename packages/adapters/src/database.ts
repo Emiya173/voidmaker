@@ -12,12 +12,13 @@ export class Database {
   private readonly db;
 
   constructor(connectionString?: string) {
-    this.pool = new pg.Pool(connectionString ? { connectionString } : undefined);
+    this.pool = new pg.Pool({ ...(connectionString ? { connectionString } : {}), connectionTimeoutMillis: 2000 });
     this.db = drizzle(this.pool);
   }
 
   async check(): Promise<void> {
-    await this.pool.query("SELECT 1");
+    const query = { text: "SELECT 1", query_timeout: 2000 };
+    await this.pool.query(query);
   }
 
   async selectedCharacter(): Promise<string> {

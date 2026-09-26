@@ -51,6 +51,7 @@ it.skipIf(!url)(
         env: {
           ...process.env,
           DATABASE_URL: url,
+          VOIDMAKER_TRAY: "0",
           FAKE_CODEX_UNIQUE_THREADS: "1",
           VOIDMAKER_SOCKET: socketPath,
           VOIDMAKER_VOICE_CONFIG: join(dir, "voice.json"),
@@ -74,7 +75,7 @@ it.skipIf(!url)(
       await once(socket, "connect");
       events = [];
       createInterface({ input: socket }).on("line", (line) => events.push(JSON.parse(line) as ServerEvent));
-      send({ type: "hello", version: 6 });
+      send({ type: "hello", version: 7 });
       await expect.poll(() => events.some((e) => e.type === "snapshot")).toBe(true);
     }
     function send(value: unknown) {
@@ -101,6 +102,27 @@ it.skipIf(!url)(
     try {
       start();
       await connect();
+      const settings = events.find((e) => e.type === "settings");
+      if (settings?.type !== "settings") throw new Error("missing settings");
+      events = [];
+      send({
+        type: "settings_save",
+        revision: settings.settings.revision,
+        config: { asr: { url: "http://127.0.0.1:1/v1/audio/transcriptions" } },
+      });
+      await expect
+        .poll(() => events.some((e) => e.type === "settings" && !e.settings.busy && !!e.settings.config.asr))
+        .toBe(true);
+      expect(events.some((e) => e.type === "voice" && e.voice.inputAvailable && e.voice.phase === "idle")).toBe(true);
+      const updated = events.findLast((e) => e.type === "settings");
+      if (updated?.type !== "settings") throw new Error("missing updated settings");
+      events = [];
+      send({ type: "settings_restore", revision: updated.settings.revision });
+      await expect
+        .poll(() => events.some((e) => e.type === "settings" && !e.settings.busy && !e.settings.config.asr))
+        .toBe(true);
+      expect(events.some((e) => e.type === "voice" && !e.voice.inputAvailable)).toBe(true);
+      events = [];
       send({ type: "desktop_grant", source: "window", minutes: 15 });
       await expect.poll(() => events.some((e) => e.type === "desktop" && e.desktop.grants.window > 0)).toBe(true);
       send({ type: "desktop_read", source: "window" });

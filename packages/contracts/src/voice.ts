@@ -14,7 +14,8 @@ const localUrl = z.url().refine((value) => {
 
 export const voiceConfigSchema = z
   .object({
-    inputTarget: z.string().min(1).optional(),
+    inputTarget: z.string().min(1).max(512).optional(),
+    outputTarget: z.string().min(1).max(512).optional(),
     aec: aecConfigSchema.optional(),
     vad: z
       .object({
@@ -23,10 +24,12 @@ export const voiceConfigSchema = z
         minSpeechMs: z.number().int().min(60).max(2000).default(240),
         maxRecordingMs: z.number().int().min(1000).max(60_000).default(30_000),
       })
+      .strict()
       .default({ threshold: 0.015, silenceMs: 800, minSpeechMs: 240, maxRecordingMs: 30_000 }),
     asr: z
       .object({
         url: localUrl,
+        healthUrl: localUrl.optional(),
         model: z
           .string()
           .min(1)
@@ -35,18 +38,26 @@ export const voiceConfigSchema = z
         language: z.string().min(1).optional(),
         timeoutMs: z.number().int().min(100).max(300_000).default(60_000),
       })
+      .strict()
       .optional(),
     tts: z
       .object({
         url: localUrl,
+        healthUrl: localUrl.optional(),
         refAudioPath: z.string().refine(isAbsolute, "参考音频必须为模型服务可读取的绝对路径"),
         promptText: z.string().min(1),
         promptLanguage: z.string().default("zh"),
         textLanguage: z.string().default("auto"),
         timeoutMs: z.number().int().min(100).max(300_000).default(120_000),
       })
+      .strict()
       .optional(),
   })
+  .strict()
+  .refine(
+    (config) => !config.aec || !config.outputTarget || config.outputTarget === config.aec.outputTarget,
+    "播放设备须与 AEC 参考输出一致",
+  )
   .refine((config) => !config.aec || !!config.inputTarget, "AEC 必须指定 inputTarget，禁止使用默认麦克风");
 export type VoiceConfig = z.infer<typeof voiceConfigSchema>;
 export type VoicePhase =

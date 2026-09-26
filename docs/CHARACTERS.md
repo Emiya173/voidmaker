@@ -3,7 +3,7 @@
 ## 使用
 
 新应用支持角色选择、角色设定、独立聊天历史/线程、静态立绘、状态差分和基础口型。
-Host/UI 协议升级为 **v6**，应同时更新。缺少角色包时仍可使用内置 VoidMaker 和几何占位形象。
+Host/UI 协议升级为 **v7**，应同时更新。缺少角色包时仍可使用内置 VoidMaker 和几何占位形象。
 
 角色目录默认为 `$XDG_DATA_HOME/voidmaker/characters`（通常是 `~/.local/share/voidmaker/characters`），
 可用 `VOIDMAKER_CHARACTERS_DIR` 指向其他目录。Host 启动时扫描前 32 个子目录；修改配置后重启 Host。

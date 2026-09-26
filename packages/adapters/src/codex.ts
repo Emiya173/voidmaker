@@ -45,6 +45,10 @@ export class CodexAppServer {
     private readonly options: CodexOptions = {},
   ) {}
 
+  get connected(): boolean {
+    return !!this.process?.stdin.writable && this.process.exitCode === null && this.process.signalCode === null;
+  }
+
   async start(): Promise<void> {
     if (this.process) return;
     const child = spawn(

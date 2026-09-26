@@ -11,6 +11,8 @@ TypeScript 已实现 PipeWire 采集、能量端点检测、HTTP ASR、GPT-SoVIT
 [麦克风与 AEC 验收](MICROPHONE_AEC_ACCEPTANCE.md)，专名识别仍存在错误。
 用户已选定 **Qwen3-ASR-0.6B** 为当前 ASR 模型。后续评测用于验证它在目标机器上的质量、延迟和资源占用。
 
+常用配置现可在「设置」页保存与恢复，见 [设置与诊断](SETTINGS_DIAGNOSTICS.md)。
+
 ## 1. 准备独立模型服务
 
 模型服务及其 Python/原生依赖、权重放在独立目录/环境，不安装进 VoidMaker 的 Node 环境。

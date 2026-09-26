@@ -22,6 +22,7 @@
           grim
           playerctl
           systemd
+          dbus
           slurp
           git
           bubblewrap

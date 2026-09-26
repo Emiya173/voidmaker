@@ -9,6 +9,8 @@ import Quickshell.Io
 
 ShellRoot {
     id: root
+    property bool interfaceVisible: true
+    property bool settingsBusy: false
     property string status: "offline"
     property string draft: ""
     property string errorText: ""
@@ -19,8 +21,21 @@ ShellRoot {
     property var character: null
     property string sessionId: ""
     readonly property bool characterReady: !!character && !character.changing && character.sessionId === sessionId
-    readonly property bool canSend: status === "idle" && characterReady && (!voice || ["idle", "review"].includes(voice.phase))
+    readonly property bool canSend: status === "idle" && !settingsBusy && characterReady && (!voice || ["idle", "review"].includes(voice.phase))
 
+    function setVisibility(value) {
+        if(!value && interfaceVisible) send({type:"stop"})
+        interfaceVisible = value
+        send({type:"desktop_presence",idle:!value || activity.isIdle})
+    }
+    IpcHandler {
+        target: "voidmaker"
+        function toggle(): void { root.setVisibility(!root.interfaceVisible) }
+        function showUi(): void { root.setVisibility(true) }
+        function hideUi(): void { root.setVisibility(false) }
+        function settings(): void { root.setVisibility(true); tabs.currentIndex = 4 }
+        function visible(): bool { return root.interfaceVisible }
+    }
     function send(command) {
         if (transport.connected) {
             errorText = ""
@@ -43,11 +58,17 @@ ShellRoot {
         let event
         try { event = JSON.parse(line) } catch (error) { return }
         workPanel.receive(event)
+        settingsPanel.receive(event)
         // Process snapshot after updating connection and selection bindings below.
         if (event.type !== "snapshot") historyPanel.receive(event)
         switch (event.type) {
+        case "settings": settingsBusy = event.settings.busy; break
+        case "shell_visibility":
+            root.setVisibility(event.action === "show" ? true : !root.interfaceVisible)
+            if(event.settings) tabs.currentIndex = 4
+            break
         case "snapshot":
-            if (event.version !== 6) { errorText = "界面与服务协议版本不匹配"; return }
+            if (event.version !== 7) { errorText = "界面与服务协议版本不匹配"; return }
             if (sessionId !== event.sessionId) input.text = ""
             sessionId = event.sessionId
             character = event.character
@@ -59,7 +80,7 @@ ShellRoot {
             conversation.positionViewAtEnd()
             historyPanel.receive(event)
             break
-        case "desktop": root.desktop = event.desktop; root.send({type: "desktop_presence", idle: activity.isIdle}); break
+        case "desktop": root.desktop = event.desktop; root.send({type: "desktop_presence", idle: !root.interfaceVisible || activity.isIdle}); break
         case "voice": setVoice(event.voice); break
         case "character": character = event.character; break
         case "message":
@@ -79,15 +100,16 @@ ShellRoot {
         path: Quickshell.env("VOIDMAKER_SOCKET") || (Quickshell.env("XDG_RUNTIME_DIR") + "/voidmaker/host.sock")
         onMessage: line => root.receive(line)
         onConnectedChanged: {
-            if (connected) { root.errorText = ""; root.send({ type: "hello", version: 6 }); if (workPanel.selectedId) root.send({type: "work_get", id: workPanel.selectedId}) }
+            if (connected) { root.errorText = ""; root.send({ type: "hello", version: 7 }); if (workPanel.selectedId) root.send({type: "work_get", id: workPanel.selectedId}) }
             else { root.status = "offline"; root.approvalId = ""; root.voice = null; root.desktop = null }
         }
     }
     IdleMonitor { id: activity; timeout: 300; enabled: !!root.desktop && root.desktop.policy.proactive
-        onIsIdleChanged: root.send({type: "desktop_presence", idle: isIdle}) }
+        onIsIdleChanged: root.send({type: "desktop_presence", idle: !root.interfaceVisible || isIdle}) }
     ListModel { id: messages }
 
     PanelWindow {
+        visible: root.interfaceVisible
         anchors { left: true; bottom: true }
         margins { left: 16; bottom: 16 }
         implicitWidth: 280; implicitHeight: 490
@@ -99,6 +121,7 @@ ShellRoot {
     }
 
     PanelWindow {
+        visible: root.interfaceVisible
         anchors { right: true; bottom: true }
         implicitWidth: 540
         implicitHeight: 860
@@ -111,6 +134,7 @@ ShellRoot {
             spacing: 12
             RowLayout {
                 Layout.fillWidth: true
+                Button { text: "隐藏"; onClicked: root.setVisibility(false) }
                 Text { text: "VoidMaker"; color: "#f5f5fa"; font.pixelSize: 23; font.bold: true }
                 Text { text: root.status === "offline" ? "未连接" : root.status === "stopping" ? "停止中"
                     : root.status === "thinking" ? "回复中" : "待命"; color: "#9dddbf" }
@@ -119,7 +143,7 @@ ShellRoot {
                     model: root.character ? root.character.characters : []
                     textRole: "name"; valueRole: "id"
                     currentIndex: root.character ? root.character.characters.findIndex(c => c.id === root.character.selectedId) : -1
-                    enabled: root.status === "idle" && root.characterReady
+                    enabled: root.status === "idle" && !root.settingsBusy && root.characterReady
                         && !!root.voice && root.voice.phase === "idle" && !root.voice.continuous
                     onActivated: root.send({type: "character_select", id: currentValue})
                 }
@@ -139,14 +163,23 @@ ShellRoot {
                 TabButton { text: "对话" }
                 TabButton { text: "桌面" + (root.desktop && root.desktop.suggestion ? " · 建议" : "") }
                 TabButton { text: "后台任务" + (workPanel.works.some(w => w.status === "awaiting_permission") ? " · 待审批" : "") }
-                TabButton { text: "会话与记忆" }
+                TabButton { text: "会话" }
+                TabButton { text: "设置" }
+            }
+            SettingsPanel {
+                id: settingsPanel
+                Layout.fillWidth: true; Layout.fillHeight: true
+                visible: tabs.currentIndex === 4
+                online: root.status !== "offline"
+                canEdit: root.status === "idle" && root.characterReady && !!root.voice && root.voice.phase === "idle" && !root.voice.continuous
+                onCommand: value => root.send(value)
             }
             HistoryPanel {
                 id: historyPanel
                 Layout.fillWidth: true; Layout.fillHeight: true
                 visible: tabs.currentIndex === 3
                 online: root.status !== "offline"
-                canEdit: root.status === "idle" && root.characterReady && !!root.voice && root.voice.phase === "idle" && !root.voice.continuous
+                canEdit: root.status === "idle" && !root.settingsBusy && root.characterReady && !!root.voice && root.voice.phase === "idle" && !root.voice.continuous
                 onCommand: value => root.send(value)
             }
             DesktopPanel {
@@ -235,7 +268,7 @@ ShellRoot {
                 VoiceControls {
                     Layout.fillWidth: true
                     snapshot: root.voice
-                    chatIdle: root.status === "idle" && root.characterReady
+                    chatIdle: root.status === "idle" && !root.settingsBusy && root.characterReady
                     onCommand: value => root.send(value)
                 }
                 RowLayout {

@@ -12,8 +12,10 @@ import { Database } from "../../../packages/adapters/src/database.js";
 import { desktopAdapters } from "../../../packages/adapters/src/desktop.js";
 import { suggestDesktop } from "../../../packages/adapters/src/desktop-codex.js";
 import { DesktopStore } from "../../../packages/adapters/src/desktop-store.js";
+import { inspectAec, inspectDevices, inspectModel } from "../../../packages/adapters/src/diagnostics.js";
 import { HistoryStore } from "../../../packages/adapters/src/history-store.js";
 import { synthesize, transcribe } from "../../../packages/adapters/src/speech-http.js";
+import { TrayService } from "../../../packages/adapters/src/tray.js";
 import { WorkStore } from "../../../packages/adapters/src/work-store.js";
 import {
   type ClientCommand,
@@ -21,15 +23,18 @@ import {
   PROTOCOL_VERSION,
   type ServerEvent,
 } from "../../../packages/contracts/src/protocol.js";
+import type { SettingsSnapshot } from "../../../packages/contracts/src/settings.js";
 import type { VoiceConfig } from "../../../packages/contracts/src/voice.js";
 import { characterInstructions } from "../../../packages/domain/src/character.js";
 import { type ConversationState, initialConversation, transition } from "../../../packages/domain/src/conversation.js";
 import { contextPrompt } from "../../../packages/domain/src/desktop.js";
 import { memoryInstructions } from "../../../packages/domain/src/memory.js";
 import { CharacterController } from "./character.js";
-import { loadVoiceConfig } from "./config.js";
+import { voiceSettingsStore } from "./config.js";
 import { DesktopController } from "./desktop.js";
+import { DiagnosticsController } from "./diagnostics.js";
 import { migrate } from "./migrate.js";
+import { SettingsController } from "./settings.js";
 import { VoiceController } from "./voice.js";
 import { WorkManager } from "./work.js";
 
@@ -59,7 +64,14 @@ class Host {
   private readonly character: CharacterController;
   private readonly history = new HistoryStore(process.env.DATABASE_URL);
   private readonly codex: CodexAppServer;
-  private readonly voice: VoiceController;
+  private voice: VoiceController;
+  private readonly settings: SettingsController;
+  private readonly diagnostics = new DiagnosticsController((diagnostics) =>
+    this.broadcast({ type: "diagnostics", diagnostics }),
+  );
+  private readonly tray = new TrayService((settings) =>
+    this.broadcast({ type: "shell_visibility", action: settings ? "show" : "toggle", settings }),
+  );
   private readonly work: WorkManager;
   private readonly desktop: DesktopController;
   private readonly desktopStore = new DesktopStore(process.env.DATABASE_URL);
@@ -69,7 +81,7 @@ class Host {
   constructor(
     private readonly database: Database,
     chatDirectory: string,
-    voiceConfig: VoiceConfig,
+    settings: SettingsSnapshot,
     characters: CharacterCatalog,
   ) {
     this.work = new WorkManager(
@@ -89,7 +101,10 @@ class Host {
     );
     this.character = new CharacterController(characters, {
       idle: () =>
-        this.state.phase === "idle" && this.voice.snapshot.phase === "idle" && !this.voice.snapshot.continuous,
+        !this.settings.snapshot.busy &&
+        this.state.phase === "idle" &&
+        this.voice.snapshot.phase === "idle" &&
+        !this.voice.snapshot.continuous,
       prepare: async (character, signal, selectedSession) => {
         const sessionId = selectedSession ?? (await this.database.characterSession(character.id, character.revision));
         await this.history.session(character, sessionId, true);
@@ -113,7 +128,26 @@ class Host {
         if (this.desktopReplyGeneration === this.state.generation) void this.stop();
       },
     });
-    this.voice = new VoiceController(
+    this.voice = this.createVoice(settings.config);
+    this.settings = new SettingsController(settings, voiceSettingsStore(), {
+      idle: () =>
+        !this.character.changing &&
+        this.state.phase === "idle" &&
+        this.voice.snapshot.phase === "idle" &&
+        !this.voice.snapshot.continuous,
+      prepare: () => this.voice.cancel(),
+      apply: (config) => {
+        this.voice = this.createVoice(config);
+        this.diagnostics.clear();
+        this.broadcast({ type: "voice", voice: this.voice.snapshot });
+        this.publishCharacter();
+      },
+      publish: (settings) => this.broadcast({ type: "settings", settings }),
+    });
+  }
+
+  private createVoice(voiceConfig: VoiceConfig): VoiceController {
+    const controller = new VoiceController(
       {
         capture: (signal, onLevel) => captureAudio(voiceConfig, signal, onLevel),
         transcribe: (wav, signal) => {
@@ -125,10 +159,18 @@ class Host {
           return synthesize(text, { ...voiceConfig.tts, ...this.character.current.voice }, signal);
         },
         play: (wav, signal, onProgress) =>
-          playAudio(wav, signal, onProgress, voiceConfig.aec ? { outputTarget: voiceConfig.aec.outputTarget } : {}),
+          playAudio(
+            wav,
+            signal,
+            onProgress,
+            (voiceConfig.aec?.outputTarget ?? voiceConfig.outputTarget)
+              ? { outputTarget: (voiceConfig.aec?.outputTarget ?? voiceConfig.outputTarget) as string }
+              : {},
+          ),
         ...(voiceConfig.aec ? { openSession: (signal: AbortSignal) => openAecSession(voiceConfig, signal) } : {}),
         submit: (text) => this.sendMessage(text),
         publish: (voice) => {
+          if (this.voice !== controller) return;
           this.broadcast({ type: "voice", voice });
           this.publishCharacter();
         },
@@ -137,9 +179,11 @@ class Host {
       Boolean(voiceConfig.tts),
       Boolean(voiceConfig.aec?.bargeIn),
     );
+    return controller;
   }
 
   async start(): Promise<void> {
+    this.tray.start();
     await this.work.start();
     await this.desktop.start();
     await this.codex.start();
@@ -150,6 +194,9 @@ class Host {
   }
 
   async close(): Promise<void> {
+    this.tray.close();
+    this.diagnostics.cancel(false);
+    await this.settings.close();
     await this.character.close();
     await this.history.close();
     for (const approval of this.approvals.values()) approval.answer("decline");
@@ -201,9 +248,37 @@ class Host {
       throw new Error("无效 JSON 命令");
     }
     const parsed = clientCommand.safeParse(raw);
-    if (!parsed.success) throw new Error("无效或不兼容的命令");
+    if (!parsed.success)
+      throw new Error(
+        "无效或不兼容的命令: " +
+          parsed.error.issues
+            .slice(0, 3)
+            .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+            .join("；"),
+      );
     const command = parsed.data;
     switch (command.type) {
+      case "settings_get":
+        this.send(client, { type: "settings", settings: this.settings.snapshot });
+        this.send(client, { type: "diagnostics", diagnostics: this.diagnostics.snapshot });
+        return;
+      case "settings_save":
+        await this.settings.change({ type: "save", revision: command.revision, config: command.config });
+        this.send(client, { type: "settings_applied" });
+        return;
+      case "settings_restore":
+        await this.settings.change({ type: "restore", revision: command.revision });
+        this.send(client, { type: "settings_applied" });
+        return;
+      case "settings_reload":
+        await this.settings.change({ type: "reload" });
+        return;
+      case "diagnostics_start":
+        this.checkServices();
+        return;
+      case "diagnostics_cancel":
+        this.diagnostics.cancel();
+        return;
       case "session_list":
       case "session_create":
       case "session_select":
@@ -217,6 +292,8 @@ class Host {
         await this.handleHistory(client, command);
         return;
       case "hello": {
+        this.send(client, { type: "settings", settings: this.settings.snapshot });
+        this.send(client, { type: "diagnostics", diagnostics: this.diagnostics.snapshot });
         this.send(client, { type: "desktop", desktop: this.desktop.snapshot });
         await this.sendSnapshot(client);
         for (const [requestId, approval] of this.approvals) {
@@ -299,7 +376,7 @@ class Host {
         await this.stop();
         return;
       case "voice_start":
-        if (this.character.changing) throw new Error("正在更新对话上下文，请稍候");
+        if (this.character.changing || this.settings.snapshot.busy) throw new Error("正在更新对话上下文或设置，请稍候");
         if (this.state.phase !== "idle") throw new Error("请先停止当前回复");
         this.voice.listen(command.continuous);
         return;
@@ -310,6 +387,64 @@ class Host {
         this.approvals.get(command.requestId)?.answer(command.decision);
         return;
     }
+  }
+
+  private checkServices(): void {
+    if (this.settings.snapshot.busy) throw new Error("设置正在保存，请稍候");
+    const config = this.settings.snapshot.config;
+    let reading: ReturnType<typeof inspectDevices> | undefined;
+    const devices = (signal: AbortSignal) => (reading ??= inspectDevices(signal));
+    this.diagnostics.start(
+      [
+        {
+          id: "database",
+          label: "PostgreSQL",
+          run: async () => {
+            await this.database.check();
+            return { id: "database", label: "PostgreSQL", status: "ready", detail: "只读连通检查通过" };
+          },
+        },
+        {
+          id: "codex",
+          label: "Codex",
+          run: async () => ({
+            id: "codex",
+            label: "Codex",
+            status: this.codex.connected ? "reachable" : "error",
+            detail: this.codex.connected ? "聊天进程在线；未验证登录或发起模型请求" : "聊天进程离线，需要重启 Host",
+          }),
+        },
+        ...(["asr", "tts"] as const).map((id) => ({
+          id,
+          label: id.toUpperCase(),
+          run: (signal: AbortSignal) => inspectModel(id, config, signal),
+        })),
+        { id: "aec", label: "AEC 插件", run: () => inspectAec(config) },
+        {
+          id: "routing",
+          label: "设备选择",
+          run: async (signal) => {
+            const found = await devices(signal);
+            const input = config.inputTarget,
+              output = config.aec?.outputTarget ?? config.outputTarget;
+            if (input && !found.some((d) => d.kind === "input" && d.name === input))
+              throw new Error("指定麦克风不在线，请从设备列表重新选择");
+            if (output && !found.some((d) => d.kind === "output" && d.name === output))
+              throw new Error("指定播放设备不在线，请从设备列表重新选择");
+            if (config.asr && !found.some((d) => d.kind === "input")) throw new Error("未发现输入设备");
+            if (config.tts && !found.some((d) => d.kind === "output")) throw new Error("未发现输出设备");
+            return {
+              id: "routing",
+              label: "设备选择",
+              status: "reachable",
+              detail: "已指定设备均在线；默认路由及实际音质未验证",
+            };
+          },
+        },
+        { id: "tray", label: "系统托盘", run: async () => this.tray.status },
+      ],
+      devices,
+    );
   }
 
   private async prepareThread(character: Character, sessionId: string, signal?: AbortSignal): Promise<string> {
@@ -402,7 +537,7 @@ class Host {
   }
 
   private async sendMessage(text: string, desktopId?: string): Promise<void> {
-    if (this.character.changing) throw new Error("正在更新对话上下文，请稍候");
+    if (this.character.changing || this.settings.snapshot.busy) throw new Error("正在更新对话上下文或设置，请稍候");
     if (this.state.phase !== "idle") throw new Error("请先停止当前回复");
     const binding = this.character.binding;
     const character = this.character.current;
@@ -549,7 +684,7 @@ async function main(): Promise<void> {
   const chatDirectory = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "voidmaker", "chat");
   await mkdir(chatDirectory, { recursive: true, mode: 0o700 });
   const database = new Database(process.env.DATABASE_URL);
-  const host = new Host(database, chatDirectory, await loadVoiceConfig(), await loadCharacters());
+  const host = new Host(database, chatDirectory, await voiceSettingsStore().load(), await loadCharacters());
   const server = createServer((client) => host.attach(client));
   try {
     await database.check();

@@ -19,6 +19,7 @@
     "aec:session-smoke": "tsx apps/tools/src/aec-session-smoke.ts"
   },
   "dependencies": {
+    "dbus-next": "0.10.2",
     "drizzle-orm": "^0.44.0",
     "pg": "^8.16.0",
     "zod": "^4.0.0"
