@@ -3,6 +3,7 @@ import { chmod, mkdir, unlink } from "node:fs/promises";
 import { createConnection, createServer, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { openAecSession } from "../../../packages/adapters/src/aec-session.js";
 import { inspectArtifact, projectPath } from "../../../packages/adapters/src/artifacts.js";
 import { captureAudio, playAudio } from "../../../packages/adapters/src/audio-process.js";
 import { CodexAppServer } from "../../../packages/adapters/src/codex.js";
@@ -96,12 +97,15 @@ class Host {
           if (!voiceConfig.tts) throw new Error("未配置 TTS");
           return synthesize(text, voiceConfig.tts, signal);
         },
-        play: playAudio,
+        play: (wav, signal, onProgress) =>
+          playAudio(wav, signal, onProgress, voiceConfig.aec ? { outputTarget: voiceConfig.aec.outputTarget } : {}),
+        ...(voiceConfig.aec ? { openSession: (signal: AbortSignal) => openAecSession(voiceConfig, signal) } : {}),
         submit: (text) => this.sendMessage(text),
         publish: (voice) => this.broadcast({ type: "voice", voice }),
       },
       Boolean(voiceConfig.asr),
       Boolean(voiceConfig.tts),
+      Boolean(voiceConfig.aec?.bargeIn),
     );
   }
 

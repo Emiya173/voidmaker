@@ -7,8 +7,8 @@ import type { VoiceConfig } from "../../contracts/src/voice.js";
 import { advanceVad, initialVad } from "../../domain/src/voice.js";
 import { FRAME_BYTES, readWav, rms, wavFromPcm } from "./pcm.js";
 
-function processHandle(executable: string, args: string[]) {
-  const child = spawn(executable, args, { stdio: "pipe" });
+function processHandle(executable: string, args: string[], env = process.env) {
+  const child = spawn(executable, args, { stdio: "pipe", env });
   let error: Error | undefined;
   let stderr = "";
   child.on("error", (value) => {
@@ -127,7 +127,7 @@ export async function playAudio(
   wav: Buffer,
   signal: AbortSignal,
   onProgress: (progress: PlaybackProgress) => void,
-  options: { executable?: string; prefixArgs?: string[]; runtimeDirectory?: string } = {},
+  options: { executable?: string; prefixArgs?: string[]; runtimeDirectory?: string; outputTarget?: string } = {},
 ): Promise<void> {
   signal.throwIfAborted();
   const audio = readWav(wav);
@@ -146,18 +146,28 @@ export async function playAudio(
     const ipc = join(directory, "mpv.sock");
     await writeFile(filename, wav, { mode: 0o600 });
     deadline.throwIfAborted();
-    handle = processHandle(options.executable ?? "mpv", [
-      ...(options.prefixArgs ?? []),
-      "--no-config",
-      "--no-terminal",
-      "--no-video",
-      "--force-window=no",
-      "--keep-open=no",
-      "--idle=no",
-      "--pause",
-      `--input-ipc-server=${ipc}`,
-      filename,
-    ]);
+    handle = processHandle(
+      options.executable ?? "mpv",
+      [
+        ...(options.prefixArgs ?? []),
+        "--no-config",
+        "--no-terminal",
+        "--no-video",
+        "--force-window=no",
+        "--keep-open=no",
+        "--idle=no",
+        "--pause",
+        ...(options.outputTarget ? ["--ao=pipewire", `--audio-device=pipewire/${options.outputTarget}`] : []),
+        `--input-ipc-server=${ipc}`,
+        filename,
+      ],
+      options.outputTarget
+        ? {
+            ...process.env,
+            PIPEWIRE_PROPS: JSON.stringify({ "node.dont-fallback": true, "node.dont-reconnect": true }),
+          }
+        : process.env,
+    );
     handle.child.stdout.resume();
     deadline.addEventListener("abort", abort, { once: true });
     socket = await connectIpc(ipc, deadline);

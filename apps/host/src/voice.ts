@@ -1,3 +1,4 @@
+import type { VoiceAudioSession } from "../../../packages/adapters/src/aec-session.js";
 import type { Capture, PlaybackProgress } from "../../../packages/adapters/src/audio-process.js";
 import type { VoiceSnapshot } from "../../../packages/contracts/src/voice.js";
 import { initialVoice, speechSegments, type VoiceEvent, voiceTransition } from "../../../packages/domain/src/voice.js";
@@ -9,6 +10,7 @@ export type VoicePorts = Readonly<{
   play: (wav: Buffer, signal: AbortSignal, onProgress: (progress: PlaybackProgress) => void) => Promise<void>;
   submit: (text: string) => Promise<void>;
   publish: (state: VoiceSnapshot) => void;
+  openSession?: (signal: AbortSignal) => Promise<VoiceAudioSession>;
 }>;
 
 /** Effect boundary: every async callback carries the generation that created it. */
@@ -17,13 +19,17 @@ export class VoiceController {
   private controller = new AbortController();
   private recording: Capture | undefined;
   private pending: Promise<void> = Promise.resolve();
+  private audioAbort: AbortController | undefined;
+  private session: VoiceAudioSession | undefined;
+  private closing: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly ports: VoicePorts,
     inputAvailable: boolean,
     outputAvailable: boolean,
+    private readonly bargeIn = false,
   ) {
-    this.state = initialVoice(inputAvailable, outputAvailable);
+    this.state = initialVoice(inputAvailable, outputAvailable, bargeIn, !!ports.openSession);
   }
   get snapshot(): VoiceSnapshot {
     return this.state;
@@ -38,14 +44,17 @@ export class VoiceController {
   private current(generation: number): boolean {
     return this.state.generation === generation && !this.controller.signal.aborted;
   }
-  private fail(error: unknown, generation: number): void {
+  private async fail(error: unknown, generation: number): Promise<void> {
     if (this.current(generation)) {
       this.controller.abort();
+      const closed = this.closeSession();
       this.dispatch({ type: "cancel", error: error instanceof Error ? error.message : String(error) });
-      this.dispatch({ type: "stage", generation: this.state.generation, phase: "idle" });
+      const cancelled = this.state.generation;
+      await closed;
+      this.dispatch({ type: "stage", generation: cancelled, phase: "idle" });
     }
   }
-  private begin(phase: "listening" | "thinking", continuous: boolean): number {
+  private begin(phase: "preparing" | "listening" | "thinking", continuous: boolean): number {
     this.controller = new AbortController();
     this.dispatch({ type: "begin", phase, continuous });
     return this.state.generation;
@@ -54,7 +63,7 @@ export class VoiceController {
   listen(continuous = false): void {
     if (!this.state.inputAvailable) throw new Error("请先配置本地 ASR 服务");
     if (!["idle", "review"].includes(this.state.phase)) throw new Error("请先停止当前语音轮次");
-    const generation = this.begin("listening", continuous);
+    const generation = this.begin(this.ports.openSession && !this.session ? "preparing" : "listening", continuous);
     this.pending = this.captureTurn(generation);
   }
   finish(): void {
@@ -63,11 +72,35 @@ export class VoiceController {
   private async captureTurn(generation: number): Promise<void> {
     const signal = this.controller.signal;
     try {
-      const recording = this.ports.capture(signal, (level) => this.dispatch({ type: "level", generation, level }));
+      if (this.ports.openSession && !this.session) {
+        this.audioAbort = new AbortController();
+        const session = await this.ports.openSession(this.audioAbort.signal);
+        if (!this.current(generation)) {
+          await session.close();
+          return;
+        }
+        this.session = session;
+        if (session.signal.aborted) throw session.signal.reason;
+        session.signal.addEventListener(
+          "abort",
+          () => {
+            if (this.session === session && !this.audioAbort?.signal.aborted)
+              void this.fail(session.signal.reason, this.state.generation);
+          },
+          { once: true },
+        );
+      }
+      if (!this.current(generation)) return;
+      this.dispatch({ type: "stage", generation, phase: "listening" });
+      const recording = (this.session?.capture ?? this.ports.capture)(signal, (level) =>
+        this.dispatch({ type: "level", generation, level }),
+      );
       this.recording = recording;
       const wav = await recording.result;
       if (!this.current(generation)) return;
       this.recording = undefined;
+      if (!this.state.continuous) await this.closeSession();
+      if (!this.current(generation)) return;
       this.dispatch({ type: "stage", generation, phase: "transcribing" });
       const text = await this.ports.transcribe(wav, signal);
       if (!this.current(generation)) return;
@@ -78,8 +111,17 @@ export class VoiceController {
         void this.ports.submit(text).catch((error: unknown) => this.fail(error, generation + 1));
       }
     } catch (error) {
-      this.fail(error, generation);
+      await this.fail(error, generation);
     }
+  }
+
+  private closeSession(): Promise<void> {
+    const session = this.session;
+    this.session = undefined;
+    this.audioAbort?.abort();
+    this.audioAbort = undefined;
+    this.closing = Promise.all([this.closing, session?.close()]).then(() => undefined);
+    return this.closing;
   }
 
   beginReply(): number {
@@ -101,13 +143,33 @@ export class VoiceController {
           const wav = await this.ports.synthesize(segment, signal);
           if (!this.current(generation)) return;
           this.dispatch({ type: "stage", generation, phase: "speaking" });
-          await this.ports.play(wav, signal, (progress) =>
-            this.dispatch({ type: "progress", generation, ...progress }),
-          );
+          const playback = new AbortController();
+          let interrupted = false;
+          let watching = true;
+          const stopWatching =
+            this.state.continuous && this.bargeIn && this.session
+              ? this.session.watchBarge(signal, () => {
+                  if (!watching || !this.current(generation) || this.state.phase !== "speaking") return;
+                  interrupted = true;
+                  playback.abort();
+                  this.dispatch({ type: "stage", generation, phase: "interrupting", subtitle: "" });
+                })
+              : undefined;
+          try {
+            await this.ports.play(wav, AbortSignal.any([signal, playback.signal]), (progress) =>
+              this.dispatch({ type: "progress", generation, ...progress }),
+            );
+          } catch (error) {
+            if (!interrupted || signal.aborted) throw error;
+          } finally {
+            watching = false;
+            stopWatching?.();
+          }
+          if (interrupted) break;
         }
       }
     } catch (error) {
-      this.fail(error, generation);
+      await this.fail(error, generation);
     } finally {
       if (this.current(generation)) this.dispatch({ type: "stage", generation, phase: "idle", subtitle: "" });
     }
@@ -117,10 +179,11 @@ export class VoiceController {
   }
   async cancel(error?: string): Promise<void> {
     this.controller.abort();
+    const closed = this.closeSession();
     this.recording = undefined;
     this.dispatch(error === undefined ? { type: "cancel" } : { type: "cancel", error });
     const generation = this.state.generation;
-    await this.pending;
+    await Promise.all([this.pending, closed]);
     this.dispatch({ type: "stage", generation, phase: "idle" });
   }
 }

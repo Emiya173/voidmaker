@@ -7,8 +7,10 @@
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+      aecPlugin = import ./nix/aec-plugin.nix { inherit pkgs; };
     in
     {
+      packages.${system}.aec-plugin = aecPlugin;
       devShells.${system}.default = pkgs.mkShell {
         packages = with pkgs; [
           nodejs_22

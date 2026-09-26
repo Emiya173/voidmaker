@@ -1,13 +1,18 @@
 import type { VoicePhase, VoiceSnapshot } from "../../contracts/src/voice.js";
 
 export type VoiceEvent =
-  | { type: "begin"; phase: "listening" | "thinking"; continuous: boolean }
+  | { type: "begin"; phase: "preparing" | "listening" | "thinking"; continuous: boolean }
   | { type: "stage"; generation: number; phase: VoicePhase; transcript?: string; subtitle?: string }
   | { type: "progress"; generation: number; position: number; duration: number; level: number }
   | { type: "level"; generation: number; level: number }
   | { type: "cancel"; error?: string };
 
-export function initialVoice(inputAvailable: boolean, outputAvailable: boolean): VoiceSnapshot {
+export function initialVoice(
+  inputAvailable: boolean,
+  outputAvailable: boolean,
+  bargeInAvailable = false,
+  aecAvailable = false,
+): VoiceSnapshot {
   return {
     phase: "idle",
     generation: 0,
@@ -20,13 +25,15 @@ export function initialVoice(inputAvailable: boolean, outputAvailable: boolean):
     level: 0,
     inputAvailable,
     outputAvailable,
+    bargeInAvailable,
+    aecAvailable,
   };
 }
 
 export function voiceTransition(state: VoiceSnapshot, event: VoiceEvent): VoiceSnapshot {
   if (event.type === "cancel")
     return {
-      ...initialVoice(state.inputAvailable, state.outputAvailable),
+      ...initialVoice(state.inputAvailable, state.outputAvailable, state.bargeInAvailable, state.aecAvailable),
       generation: state.generation + 1,
       phase: "stopping",
       error: event.error ?? "",

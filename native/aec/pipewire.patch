@@ -1,0 +1,36 @@
+--- a/spa/plugins/aec/aec-webrtc.cpp
++++ b/spa/plugins/aec/aec-webrtc.cpp
+@@ -23,7 +23,10 @@
+ #include <modules/audio_processing/include/audio_processing.h>
+ #endif
+ 
++#include "voidmaker-aec.hpp"
++
+ struct impl_data {
+ 	struct spa_handle handle;
+ 	struct spa_audio_aec aec;
++	std::unique_ptr<VmAecSettings> vm;
+ 
+@@ -227,7 +230,11 @@
+ 	auto apm = std::unique_ptr<webrtc::AudioProcessing>(webrtc::AudioProcessingBuilder().Create());
+ 	apm->ApplyConfig(config);
+ #elif defined(HAVE_WEBRTC2)
+-	auto apm = webrtc::AudioProcessingBuilder().Create();
++	impl->vm = std::make_unique<VmAecSettings>();
++	if (mobile_mode || !impl->vm->init(args, rec_info->channels)) return -EINVAL;
++	config.echo_canceller.export_linear_aec_output = impl->vm->linear != nullptr;
++	auto apm = webrtc::AudioProcessingBuilder()
++		.SetEchoControlFactory(std::make_unique<VmEchoFactory>(impl->vm->config)).Create();
+ 	apm->ApplyConfig(config);
+ #endif
+ 
+@@ -323,7 +330,9 @@
+ 					rec_config, out_config, impl->out_buffer.get())) !=
+ 				webrtc::AudioProcessing::kNoError) {
+ 			spa_log_error(impl->log, "Processing stream failed: %d", res);
++			return -EIO;
+ 		}
++		if (!impl->vm->dump(impl->apm.get())) return -EIO;
+ 	}
+ 	return 0;
+ }
