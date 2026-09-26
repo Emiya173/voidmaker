@@ -23,6 +23,16 @@ it.skipIf(!url)(
       `#!${process.execPath}\nimport ${JSON.stringify(join(process.cwd(), "tests/fixtures/fake-codex.mjs"))};\n`,
     );
     await chmod(join(binaryDir, "codex"), 0o700);
+    for (const [name, output] of Object.entries({
+      niri: JSON.stringify({ id: 1, app_id: "fixture", title: "fixture desktop context" }),
+      loginctl: "Active=yes\nLockedHint=no\nIdleHint=no\n",
+    })) {
+      await writeFile(
+        join(binaryDir, name),
+        `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(output)});\n`,
+      );
+      await chmod(join(binaryDir, name), 0o700);
+    }
     await writeFile(join(dir, "voice.json"), "{}");
     let child: ChildProcess | undefined;
     let socket: Socket | undefined;
@@ -55,7 +65,7 @@ it.skipIf(!url)(
       await once(socket, "connect");
       events = [];
       createInterface({ input: socket }).on("line", (line) => events.push(JSON.parse(line) as ServerEvent));
-      send({ type: "hello", version: 3 });
+      send({ type: "hello", version: 4 });
       await expect.poll(() => events.some((e) => e.type === "snapshot")).toBe(true);
     }
     function send(value: unknown) {
@@ -82,6 +92,25 @@ it.skipIf(!url)(
     try {
       start();
       await connect();
+      send({ type: "desktop_grant", source: "window", minutes: 15 });
+      await expect.poll(() => events.some((e) => e.type === "desktop" && e.desktop.grants.window > 0)).toBe(true);
+      send({ type: "desktop_read", source: "window" });
+      await expect.poll(() => events.some((e) => e.type === "desktop" && e.desktop.observations.length > 0)).toBe(true);
+      const preview = events.findLast((e) => e.type === "desktop" && e.desktop.observations.length > 0);
+      if (preview?.type !== "desktop") throw new Error("missing preview");
+      send({ type: "desktop_send", id: preview.desktop.observations[0]?.id, text: "wait" });
+      await expect
+        .poll(() =>
+          events.some(
+            (e) =>
+              e.type === "message" && e.message.role === "user" && e.message.text.includes("fixture desktop context"),
+          ),
+        )
+        .toBe(true);
+      send({ type: "desktop_revoke" });
+      await expect.poll(() => events.some((e) => e.type === "status" && e.status === "idle")).toBe(true);
+      expect(events.some((e) => e.type === "message" && e.message.role === "assistant")).toBe(false);
+      send({ type: "desktop_grant", source: "window", minutes: 15 });
       send({ type: "project_add", name: "Host test", path: dir });
       await expect.poll(() => events.some((e) => e.type === "work_changed")).toBe(true);
       send({ type: "work_list" });
@@ -113,6 +142,9 @@ it.skipIf(!url)(
       await exited;
       start();
       await connect();
+      const desktop = events.find((e) => e.type === "desktop");
+      expect(desktop?.type === "desktop" && desktop.desktop.grants.window).toBe(0);
+      expect(desktop?.type === "desktop" && desktop.desktop.policy.proactive).toBe(false);
       const restored = await detail(approvalTask);
       expect(restored.work.status).toBe("interrupted");
       expect(restored.attempts).toHaveLength(1);

@@ -27,7 +27,8 @@ ASR 是独立推理服务中的少量 Python，应用音频编排与业务逻辑
 
 ## 服务与配置
 
-以下 `systemd --user` 服务均已启动并启用：
+初次部署时以下 `systemd --user` 服务均已启动并启用。后续系统重配置后的当前自启状态应以
+`systemctl --user is-enabled` 为准；本轮桌面更新只重启 Host / Shell，没有改动自启策略：
 
 - `voidmaker-postgres.service`
 - `voidmaker-asr.service`
@@ -124,3 +125,8 @@ USB 麦克风已在线并配置为输入。下一轮可从界面“开始说话�
 - 静音、键盘声、扬声器回声和设备拔插后的恢复。
 
 能量 VAD、句末延迟和连续对话声学表现尚不能由本轮文件验收证明。声学插话/AEC 仍未实现。
+
+## 桌面阶段更新
+
+Host / Quickshell 已升级至 IPC v4，并应用 `0003_desktop.sql`。桌面授权和主动观察默认关闭。
+实测结果、数据边界与仍待交互验收的项目见 [桌面上下文](DESKTOP_CONTEXT.md)。

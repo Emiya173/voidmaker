@@ -41,6 +41,27 @@ describe("Codex App Server transport", () => {
     expect(events).toContain("turn/started");
     expect(events).toContain("turn/completed");
   });
+  it("restricts observer tools, uses ephemeral structured output and explicit image input", async () => {
+    const instance = new CodexAppServer(
+      async () => "accept",
+      process.cwd(),
+      process.execPath,
+      [join(process.cwd(), "tests/fixtures/fake-codex.mjs")],
+      { restricted: true, observer: true },
+    );
+    clients.push(instance);
+    await instance.start();
+    const thread = await instance.startThread();
+    const image = "data:image/png;base64,fixture";
+    const policy = JSON.parse(await instance.run(thread, "policy", () => undefined, [image]));
+    expect(policy.threadParams.ephemeral).toBe(true);
+    expect(policy.threadParams.approvalPolicy).toBe("never");
+    expect(policy.threadParams.config["features.shell_tool"]).toBe(false);
+    expect(policy.threadParams.config.mcp_servers.test.enabled).toBe(false);
+    expect(policy.turnParams.outputSchema.required).toEqual(["speak", "text"]);
+    expect(policy.turnParams.input[1]).toEqual({ type: "image", url: image });
+    expect(await instance.run(thread, "approval", () => undefined)).toBe("decline");
+  });
   it("streams the final message without mixing commentary", async () => {
     const instance = await client();
     const threadId = await instance.startThread();

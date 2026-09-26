@@ -1,11 +1,13 @@
 import { z } from "zod";
+import { type DesktopSnapshot, desktopCommands } from "./desktop.js";
 import type { VoiceSnapshot } from "./voice.js";
 import { type Project, type WorkDetail, type WorkItem, workCommands } from "./work.js";
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 export const clientCommand = z.discriminatedUnion("type", [
   ...workCommands,
+  ...desktopCommands,
   z.object({ type: z.literal("hello"), version: z.literal(PROTOCOL_VERSION) }),
   z.object({ type: z.literal("send"), text: z.string().trim().min(1).max(10_000) }),
   z.object({ type: z.literal("stop") }),
@@ -37,6 +39,7 @@ export type ServerEvent =
       draft: string;
       voice: VoiceSnapshot;
     }
+  | { type: "desktop"; desktop: DesktopSnapshot }
   | { type: "message"; message: Message }
   | { type: "voice"; voice: VoiceSnapshot }
   | { type: "delta"; turnId: string; text: string }

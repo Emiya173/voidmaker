@@ -7,12 +7,17 @@ import { inspectArtifact, projectPath } from "../../../packages/adapters/src/art
 import { captureAudio, playAudio } from "../../../packages/adapters/src/audio-process.js";
 import { CodexAppServer } from "../../../packages/adapters/src/codex.js";
 import { Database, DEFAULT_SESSION_ID } from "../../../packages/adapters/src/database.js";
+import { desktopAdapters } from "../../../packages/adapters/src/desktop.js";
+import { suggestDesktop } from "../../../packages/adapters/src/desktop-codex.js";
+import { DesktopStore } from "../../../packages/adapters/src/desktop-store.js";
 import { synthesize, transcribe } from "../../../packages/adapters/src/speech-http.js";
 import { WorkStore } from "../../../packages/adapters/src/work-store.js";
 import { clientCommand, PROTOCOL_VERSION, type ServerEvent } from "../../../packages/contracts/src/protocol.js";
 import type { VoiceConfig } from "../../../packages/contracts/src/voice.js";
 import { type ConversationState, initialConversation, transition } from "../../../packages/domain/src/conversation.js";
+import { contextPrompt } from "../../../packages/domain/src/desktop.js";
 import { loadVoiceConfig } from "./config.js";
+import { DesktopController } from "./desktop.js";
 import { migrate } from "./migrate.js";
 import { VoiceController } from "./voice.js";
 import { WorkManager } from "./work.js";
@@ -44,6 +49,10 @@ class Host {
   private readonly codex: CodexAppServer;
   private readonly voice: VoiceController;
   private readonly work: WorkManager;
+  private readonly desktop: DesktopController;
+  private readonly desktopStore = new DesktopStore(process.env.DATABASE_URL);
+  private readonly presence = new Map<Socket, boolean>();
+  private desktopReplyGeneration: number | null = null;
 
   constructor(
     private readonly database: Database,
@@ -58,7 +67,24 @@ class Host {
         this.broadcast({ type: "error", message });
       },
     );
-    this.codex = new CodexAppServer((method, params) => this.askApproval(method, params), chatDirectory);
+    this.codex = new CodexAppServer(
+      (method, params) => this.askApproval(method, params),
+      chatDirectory,
+      "codex",
+      ["app-server", "--stdio"],
+      { restricted: true },
+    );
+    this.desktop = new DesktopController(join(dirname(socketPath), "desktop"), {
+      adapters: desktopAdapters(),
+      store: this.desktopStore,
+      publish: (desktop) => this.broadcast({ type: "desktop", desktop }),
+      present: () => [...this.presence.values()].some((idle) => !idle),
+      idle: () => this.state.phase === "idle" && this.voice.snapshot.phase === "idle",
+      suggest: (context, signal) => suggestDesktop(chatDirectory, context, signal),
+      revoked: () => {
+        if (this.desktopReplyGeneration === this.state.generation) void this.stop();
+      },
+    });
     this.voice = new VoiceController(
       {
         capture: (signal, onLevel) => captureAudio(voiceConfig, signal, onLevel),
@@ -81,6 +107,7 @@ class Host {
 
   async start(): Promise<void> {
     await this.work.start();
+    await this.desktop.start();
     const oldThread = await this.database.ensureSession();
     await this.codex.start();
     this.threadId = await this.codex.startThread(oldThread);
@@ -90,6 +117,8 @@ class Host {
   async close(): Promise<void> {
     for (const approval of this.approvals.values()) approval.answer("decline");
     for (const client of this.clients) client.destroy();
+    await this.desktop.close();
+    await this.desktopStore.close();
     await this.voice.cancel();
     await this.codex.close();
     await this.work.close();
@@ -100,7 +129,9 @@ class Host {
     this.clients.add(client);
     client.on("close", () => {
       this.clients.delete(client);
+      this.presence.delete(client);
       if (this.clients.size === 0) {
+        this.desktop.disconnected();
         void this.voice.cancel().catch((error: unknown) => console.error("语音停止失败", error));
       }
     });
@@ -137,6 +168,7 @@ class Host {
     const command = parsed.data;
     switch (command.type) {
       case "hello": {
+        this.send(client, { type: "desktop", desktop: this.desktop.snapshot });
         const messages = await this.database.listMessages(DEFAULT_SESSION_ID);
         this.send(client, {
           type: "snapshot",
@@ -153,6 +185,27 @@ class Host {
         this.send(client, { type: "work_list", ...(await this.work.store.list()) });
         return;
       }
+      case "desktop_grant":
+        await this.desktop.grant(command.source, command.minutes);
+        return;
+      case "desktop_revoke":
+        await this.desktop.revoke(command.source);
+        return;
+      case "desktop_policy":
+        await this.desktop.configure(command.policy);
+        return;
+      case "desktop_read":
+        await this.desktop.read(command.source);
+        return;
+      case "desktop_clear":
+        await this.desktop.clear();
+        return;
+      case "desktop_presence":
+        this.presence.set(client, command.idle);
+        return;
+      case "desktop_send":
+        await this.sendMessage(command.text, command.id);
+        return;
       case "project_add":
         await this.work.store.addProject(command.name, await projectPath(command.path));
         this.broadcast({ type: "work_changed", id: "" });
@@ -213,21 +266,35 @@ class Host {
     }
   }
 
-  private async sendMessage(text: string): Promise<void> {
+  private async sendMessage(text: string, desktopId?: string): Promise<void> {
     if (this.state.phase !== "idle") throw new Error("请先停止当前回复");
     const voiceGeneration = this.voice.beginReply();
     this.state = transition(this.state, { type: "send" });
     const generation = this.state.generation;
+    if (desktopId) this.desktopReplyGeneration = generation;
     this.broadcast({ type: "status", status: "thinking" });
     try {
-      const message = await this.database.addMessage(DEFAULT_SESSION_ID, "user", text);
+      const shared = desktopId ? await this.desktop.share(desktopId) : undefined;
+      shared?.signal.throwIfAborted();
+      if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
+      const prompt = shared ? contextPrompt(text, shared.context) : text;
+      const message = await this.database.addMessage(
+        DEFAULT_SESSION_ID,
+        "user",
+        shared ? `${text}\n\n[附带桌面上下文]\n${shared.context}` : text,
+      );
       this.broadcast({ type: "message", message });
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
-      const reply = await this.codex.run(this.threadId, text, (delta) => {
-        if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
-        this.state = transition(this.state, { type: "delta", generation, text: delta });
-        this.broadcast({ type: "delta", turnId: String(generation), text: delta });
-      });
+      const reply = await this.codex.run(
+        this.threadId,
+        prompt,
+        (delta) => {
+          if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
+          this.state = transition(this.state, { type: "delta", generation, text: delta });
+          this.broadcast({ type: "delta", turnId: String(generation), text: delta });
+        },
+        shared?.imageUrl ? [shared.imageUrl] : [],
+      );
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
       if (reply.trim()) {
         const assistantMessage = await this.database.addMessage(DEFAULT_SESSION_ID, "assistant", reply);
@@ -243,6 +310,7 @@ class Host {
         await this.voice.cancel(error instanceof Error ? error.message : String(error));
       }
     } finally {
+      if (this.desktopReplyGeneration === generation) this.desktopReplyGeneration = null;
       if (this.state.phase === "thinking" && this.state.generation === generation) {
         this.state = transition(this.state, { type: "complete", generation });
         this.broadcast({ type: "status", status: "idle" });

@@ -18,6 +18,8 @@
           pipewire
           mpv
           grim
+          playerctl
+          systemd
           slurp
           git
           bubblewrap

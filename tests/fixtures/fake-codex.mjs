@@ -18,7 +18,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     turnId += 1;
     send({ id: message.id, result: { turn: { id: String(turnId) } } });
     if (message.params.input[0].text === "crash") process.exit(2);
-    if (message.params.input[0].text === "wait") return;
+    if ((message.params.input[0].text === "wait" || message.params.input[0].text.startsWith("wait\n\n"))) return;
     if (message.params.input[0].text === "policy") {
       notify("item/completed", { threadId: "thread", turnId: String(turnId), item: { type: "agentMessage", phase: "final_answer", text: JSON.stringify({threadParams, turnParams: message.params}) } });
       complete();

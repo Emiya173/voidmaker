@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Quickshell
+import Quickshell.Wayland
 import Quickshell.Io
 
 ShellRoot {
@@ -13,6 +14,7 @@ ShellRoot {
     property string errorText: ""
     property string approvalId: ""
     property string approvalText: ""
+    property var desktop: null
     property var voice: null
     readonly property bool canSend: status === "idle" && (!voice || ["idle", "review"].includes(voice.phase))
 
@@ -41,7 +43,7 @@ ShellRoot {
         workPanel.receive(event)
         switch (event.type) {
         case "snapshot":
-            if (event.version !== 3) { errorText = "界面与服务协议版本不匹配"; return }
+            if (event.version !== 4) { errorText = "界面与服务协议版本不匹配"; return }
             messages.clear()
             for (const message of event.messages) messages.append({ role: message.role, content: message.text })
             status = event.status
@@ -49,6 +51,7 @@ ShellRoot {
             setVoice(event.voice)
             conversation.positionViewAtEnd()
             break
+        case "desktop": root.desktop = event.desktop; root.send({type: "desktop_presence", idle: activity.isIdle}); break
         case "voice": setVoice(event.voice); break
         case "message":
             if (event.message.role === "assistant") draft = ""
@@ -68,11 +71,13 @@ ShellRoot {
         connected: true
         parser: SplitParser { onRead: line => root.receive(line) }
         onConnectedChanged: {
-            if (connected) { root.errorText = ""; root.send({ type: "hello", version: 3 }); if (workPanel.selectedId) root.send({type: "work_get", id: workPanel.selectedId}) }
-            else { root.status = "offline"; root.approvalId = ""; root.voice = null }
+            if (connected) { root.errorText = ""; root.send({ type: "hello", version: 4 }); if (workPanel.selectedId) root.send({type: "work_get", id: workPanel.selectedId}) }
+            else { root.status = "offline"; root.approvalId = ""; root.voice = null; root.desktop = null }
         }
     }
     Timer { interval: 2000; repeat: true; running: !transport.connected; onTriggered: transport.connected = true }
+    IdleMonitor { id: activity; timeout: 300; enabled: !!root.desktop && root.desktop.policy.proactive
+        onIsIdleChanged: root.send({type: "desktop_presence", idle: isIdle}) }
     ListModel { id: messages }
 
     PanelWindow {
@@ -97,12 +102,19 @@ ShellRoot {
                 id: tabs
                 Layout.fillWidth: true
                 TabButton { text: "对话" }
+                TabButton { text: "桌面" + (root.desktop && root.desktop.suggestion ? " · 建议" : "") }
                 TabButton { text: "后台任务" + (workPanel.works.some(w => w.status === "awaiting_permission") ? " · 待审批" : "") }
+            }
+            DesktopPanel {
+                Layout.fillWidth: true; Layout.fillHeight: true
+                visible: tabs.currentIndex === 1; snapshot: root.desktop
+                online: root.status !== "offline"; canSend: root.canSend
+                onCommand: value => { root.send(value); if (value.type === "desktop_send") tabs.currentIndex = 0 }
             }
             WorkPanel {
                 id: workPanel
                 Layout.fillWidth: true; Layout.fillHeight: true
-                visible: tabs.currentIndex === 1
+                visible: tabs.currentIndex === 2
                 online: root.status !== "offline"
                 onCommand: value => root.send(value)
             }
@@ -174,7 +186,7 @@ ShellRoot {
                 Button {
                     text: "将输入转为任务草稿"
                     enabled: input.text.trim().length > 0
-                    onClicked: { workPanel.useTranscript(input.text.trim()); tabs.currentIndex = 1 }
+                    onClicked: { workPanel.useTranscript(input.text.trim()); tabs.currentIndex = 2 }
                 }
                 VoiceControls {
                     Layout.fillWidth: true
