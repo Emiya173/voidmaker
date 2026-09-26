@@ -19,7 +19,7 @@ ShellRoot {
  HostConnection {
   id: connection
   path: ${JSON.stringify(socketPath)}
-  onConnectedChanged: { console.log(connected ? "TEST_CONNECTED" : "TEST_DISCONNECTED"); if (connected) send({type: "hello", version: 4}) }
+  onConnectedChanged: { console.log(connected ? "TEST_CONNECTED" : "TEST_DISCONNECTED"); if (connected) send({type: "hello", version: 5}) }
   onMessage: line => console.log("TEST_FRAME:" + line)
  }
 }`,
@@ -63,8 +63,8 @@ ShellRoot {
       await once(server, "listening");
       await expect.poll(() => log, { timeout: 6000 }).toContain('TEST_FRAME:{"epoch":2}');
       expect(hello).toEqual([
-        { type: "hello", version: 4 },
-        { type: "hello", version: 4 },
+        { type: "hello", version: 5 },
+        { type: "hello", version: 5 },
       ]);
       expect(log).not.toMatch(/ReferenceError|TypeError|Failed to load configuration/);
     } finally {

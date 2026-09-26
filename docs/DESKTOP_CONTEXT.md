@@ -1,6 +1,7 @@
 # 桌面上下文与主动观察
 
-阶段 4 的首个实现面向 NixOS + niri + Quickshell。协议为 v4，Host 与 UI 应一起更新。
+阶段 4 的首个实现面向 NixOS + niri + Quickshell，桌面命令自协议 v4 引入。
+角色层接入后整体协议为 v5，Host 与 UI 应一起更新。
 业务状态与权限在 TypeScript Host；QML 只展示快照、编辑设置及发送显式命令。
 
 ## 使用

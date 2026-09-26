@@ -1,6 +1,6 @@
 # VoidMaker AI 语音助手全面重构计划
 
-> 修订日期：2026-09-26。目标环境：NixOS + niri + Quickshell。本文包含目标架构与实施计划，当前完成情况见第 8 节。
+> 修订日期：2026-09-26。目标环境：NixOS + niri + Quickshell。本文保留目标架构与分阶段实施历史；最新状态与剩余范围见 [整体未完成项](REMAINING_WORK.md)。第 8 节早期记录中的限制需结合后续验收阅读。
 
 ## 1. 重构决策
 
@@ -17,7 +17,7 @@ VoidMaker 将以 [Amadeus 的 Talk / Embody / Act / Control](https://github.com/
 
 ## 2. 功能范围与现状差距
 
-现状来自本仓库代码；参考能力来自 [Amadeus README](https://github.com/Code-Amadeus/Amadeus#current-capabilities) 和 [架构说明](https://github.com/Code-Amadeus/Amadeus/blob/main/ARCHITECTURE.md)。表中“目标”均为待实现。
+下表是制定计划时的旧 Python 应用现状，不是当前 TypeScript 实现状态；参考能力来自 [Amadeus README](https://github.com/Code-Amadeus/Amadeus#current-capabilities) 和 [架构说明](https://github.com/Code-Amadeus/Amadeus/blob/main/ARCHITECTURE.md)。目标中的部分能力现已完成，见最新状态清单。
 
 | 用户能力 | 当前实现 | 重构目标 |
 | --- | --- | --- |
@@ -234,3 +234,10 @@ ASR、TTS、PostgreSQL、Host 和 Quickshell 均由 systemd 用户服务管理�
 46 项测试及真实 grim / Codex 图片、合成上下文建议链路通过；正式服务已更新。
 本阶段采用目标桌面可用的 Wayland 工具链，portal 回退和剪贴板读取暂未实现。
 手动框选、活跃播放器、真实锁屏及建议质量仍待交互验收；详见 [桌面接入与验收](DESKTOP_CONTEXT.md)。
+
+### 后续：交互验收与角色基础层
+
+上述桌面交互、真人语音和可选双路插话已在后续完成受控验收，详情见各专项文档。
+角色基础层已接入：新角色 schema、外置素材、Codex 角色指令、按角色/配置版本隔离的会话与线程、
+可选参考声音覆盖、透明差分立绘和实际播放音量驱动的口型。统一协议为 v5，迁移为 0004。
+代码和验证见 [角色说明](CHARACTERS.md)；未完成范围以 [当前清单](REMAINING_WORK.md) 为准。

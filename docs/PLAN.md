@@ -1,5 +1,7 @@
 # VoidMaker 重构计划
 
+> 旧 Python/Claude 方案，仅保留为历史参考。当前目标见 [TypeScript 重构计划](VOICE_ASSISTANT_PLAN.md)，最新进度见 [整体未完成项](REMAINING_WORK.md)。本文不作为当前实现或安装指南。
+
 (2026-07 制定。参考仓库:~/dev/sakura;ROCm 环境参考:~/dev/michi-ocr)
 
 ## 总体判断

@@ -2,24 +2,27 @@
 
 面向 **NixOS + niri + Quickshell** 的 AI 语音助手，正在从 Python 桌宠全面重构为 TypeScript 应用。
 完整目标与选型见 [重构计划](docs/VOICE_ASSISTANT_PLAN.md)。
+当前缺口、待验收与暂缓范围见 [整体未完成项](docs/REMAINING_WORK.md)。
 
 ## 当前可用范围
 
 - 独立 TypeScript Host，经 Unix socket 连接新的 Quickshell 界面。
+- 角色配置与切换、按角色隔离的历史/线程、立绘差分与播放音量驱动的基础口型，见 [角色说明](docs/CHARACTERS.md)。
 - Codex App Server 文字对话、最终回复流和停止生成；普通聊天只处理提供的上下文。
 - PostgreSQL 保存消息与 Codex 线程引用，Host/UI 重启后恢复历史。
 - 纯函数对话/语音状态机、协议校验、数据库迁移与回归测试。
 - 持久后台任务、项目草稿、审批、取消、产物校验及崩溃恢复，见 [后台任务](docs/WORK_TASKS.md)。
 - 桌面窗口 / 媒体读取、手动框选截图、独立到期授权和默认关闭的主动建议，见 [桌面上下文](docs/DESKTOP_CONTEXT.md)。
-- PipeWire 录音、可编辑 ASR 转写、GPT-SoVITS 按句朗读、半双工连续对话与取消控制。
+- PipeWire 录音、可编辑 ASR 转写、GPT-SoVITS 按句朗读、半双工及可选双路插话连续对话与取消控制。
 
 ASR 选用 **Qwen3-ASR-0.6B**，TTS 使用 GPT-SoVITS，均需单独部署本地模型服务。
-当前机器已完成本地部署、现有音频识别和实际播放验收；真人麦克风与连续对话验收仍待进行。
+当前机器已完成本地部署、真人麦克风、单句插话及 Host/UI 连续对话验收；不同声学条件和长期稳定性仍待验证。
 服务操作与实测数据见 [部署验收报告](docs/DEPLOYMENT_ACCEPTANCE.md)。
-部署、配置和评测见 [语音接入说明](docs/VOICE_SETUP.md)。声学插话与角色动画仍待实现。
+部署、配置和评测见 [语音接入说明](docs/VOICE_SETUP.md)。复杂角色动画和逐字字幕尚未实现。
 `src/voidmaker/` 是待迁移/删除的旧 Python 实现；新入口不依赖它，也不保证旧 UI 或配置兼容。
 
-当前仅提供一个聊天会话，界面加载最近 200 条消息。后台任务审批已持久化；普通聊天禁用执行工具。
+当前每个角色配置版本绑定一个聊天会话，界面加载最近 200 条消息；没有通用多会话管理界面。
+后台任务审批已持久化；普通聊天禁用执行工具。
 聊天 Codex 子进程故障后需重启 Host；历史分页和聊天事件游标尚未实现。
 
 ## 开发环境

@@ -27,7 +27,7 @@ flowchart LR
 ```
 
 - `packages/domain/src/work.ts`：状态转换规则，不访问数据库、网络或进程。
-- `packages/contracts/src/work.ts`：IPC 命令、状态和投影类型。UI 协议整体升级为 v3。
+- `packages/contracts/src/work.ts`：IPC 命令、状态和投影类型。工作命令自 v3 引入；当前整体协议为 v5。
 - `packages/adapters/src/work-store.ts`：参数化 PostgreSQL SQL、行锁、事务及调度器 advisory lock。
   任务账本使用显式 SQL，便于审查状态更新与事件写入的原子边界；迁移文件是数据库结构的来源。
 - `apps/host/src/work.ts`：单后台执行槽、持久队列、审批计时器、进程生命周期、事件排序和产物登记。
@@ -90,6 +90,6 @@ pnpm work:smoke
 - Host 与 Quickshell 用户服务已启动，迁移和 IPC v3 加载正常；使用虚构任务的组件截图检查了任务选择、审批和事件布局。
 - 本轮没有录制麦克风；真人语音委托、VAD 与连续对话的设备验收延续此前待办。
 
-当前范围：一个聊天会话、一个后台执行槽；任务列表最近 100 项、详情最近 100 条事件（数据库保留完整记录）。
+当前范围：按角色配置版本隔离聊天会话、一个后台执行槽；任务列表最近 100 项、详情最近 100 条事件（数据库保留完整记录）。
 单文件校验上限 20 MiB，文本预览前 64 KiB，最多登记 100 个产物；二进制只显示元数据。
 暂不包含任务搜索/分页、自动重放、Git worktree 自动隔离、桌面打开程序或联网工具扩展。

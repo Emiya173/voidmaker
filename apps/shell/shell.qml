@@ -16,7 +16,10 @@ ShellRoot {
     property string approvalText: ""
     property var desktop: null
     property var voice: null
-    readonly property bool canSend: status === "idle" && (!voice || ["idle", "review"].includes(voice.phase))
+    property var character: null
+    property string sessionId: ""
+    readonly property bool characterReady: !!character && !character.changing && character.sessionId === sessionId
+    readonly property bool canSend: status === "idle" && characterReady && (!voice || ["idle", "review"].includes(voice.phase))
 
     function send(command) {
         if (transport.connected) {
@@ -42,7 +45,10 @@ ShellRoot {
         workPanel.receive(event)
         switch (event.type) {
         case "snapshot":
-            if (event.version !== 4) { errorText = "界面与服务协议版本不匹配"; return }
+            if (event.version !== 5) { errorText = "界面与服务协议版本不匹配"; return }
+            if (sessionId !== event.sessionId) input.text = ""
+            sessionId = event.sessionId
+            character = event.character
             messages.clear()
             for (const message of event.messages) messages.append({ role: message.role, content: message.text })
             status = event.status
@@ -52,6 +58,7 @@ ShellRoot {
             break
         case "desktop": root.desktop = event.desktop; root.send({type: "desktop_presence", idle: activity.isIdle}); break
         case "voice": setVoice(event.voice); break
+        case "character": character = event.character; break
         case "message":
             if (event.message.role === "assistant") draft = ""
             messages.append({ role: event.message.role, content: event.message.text })
@@ -69,13 +76,24 @@ ShellRoot {
         path: Quickshell.env("VOIDMAKER_SOCKET") || (Quickshell.env("XDG_RUNTIME_DIR") + "/voidmaker/host.sock")
         onMessage: line => root.receive(line)
         onConnectedChanged: {
-            if (connected) { root.errorText = ""; root.send({ type: "hello", version: 4 }); if (workPanel.selectedId) root.send({type: "work_get", id: workPanel.selectedId}) }
+            if (connected) { root.errorText = ""; root.send({ type: "hello", version: 5 }); if (workPanel.selectedId) root.send({type: "work_get", id: workPanel.selectedId}) }
             else { root.status = "offline"; root.approvalId = ""; root.voice = null; root.desktop = null }
         }
     }
     IdleMonitor { id: activity; timeout: 300; enabled: !!root.desktop && root.desktop.policy.proactive
         onIsIdleChanged: root.send({type: "desktop_presence", idle: isIdle}) }
     ListModel { id: messages }
+
+    PanelWindow {
+        anchors { left: true; bottom: true }
+        margins { left: 16; bottom: 16 }
+        implicitWidth: 280; implicitHeight: 490
+        color: "transparent"
+        exclusionMode: ExclusionMode.Ignore
+        focusable: false
+        mask: Region {}
+        CharacterView { anchors.fill: parent; snapshot: root.character; online: transport.connected }
+    }
 
     PanelWindow {
         anchors { right: true; bottom: true }
@@ -93,6 +111,23 @@ ShellRoot {
                 Text { text: "VoidMaker"; color: "#f5f5fa"; font.pixelSize: 23; font.bold: true }
                 Text { text: root.status === "offline" ? "未连接" : root.status === "stopping" ? "停止中"
                     : root.status === "thinking" ? "回复中" : "待命"; color: "#9dddbf" }
+                ComboBox {
+                    Layout.fillWidth: true
+                    model: root.character ? root.character.characters : []
+                    textRole: "name"; valueRole: "id"
+                    currentIndex: root.character ? root.character.characters.findIndex(c => c.id === root.character.selectedId) : -1
+                    enabled: root.status === "idle" && root.characterReady
+                        && !!root.voice && root.voice.phase === "idle" && !root.voice.continuous
+                    onActivated: root.send({type: "character_select", id: currentValue})
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: !!root.character && (root.character.changing || root.character.warnings.length > 0)
+                text: root.character && root.character.changing ? "正在切换角色…"
+                    : root.character ? root.character.warnings.join("\n") : ""
+                color: "#dccb9a"; wrapMode: Text.Wrap; textFormat: Text.PlainText
+                maximumLineCount: 2; elide: Text.ElideRight
             }
             Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: "#343b50" }
             TabBar {
@@ -188,7 +223,7 @@ ShellRoot {
                 VoiceControls {
                     Layout.fillWidth: true
                     snapshot: root.voice
-                    chatIdle: root.status === "idle"
+                    chatIdle: root.status === "idle" && root.characterReady
                     onCommand: value => root.send(value)
                 }
                 RowLayout {

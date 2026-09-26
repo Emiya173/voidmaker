@@ -18,6 +18,26 @@ afterEach(async () => {
 });
 
 describe("Codex App Server transport", () => {
+  it("applies character instructions on restricted start/resume without enabling tools", async () => {
+    const instance = new CodexAppServer(
+      async () => "decline",
+      process.cwd(),
+      process.execPath,
+      [join(process.cwd(), "tests/fixtures/fake-codex.mjs")],
+      { restricted: true },
+    );
+    clients.push(instance);
+    await instance.start();
+    const first = await instance.startThread(null, "你是角色 A");
+    let policy = JSON.parse(await instance.run(first, "policy", () => {}));
+    expect(policy.threadParams.baseInstructions).toContain("你是角色 A");
+    const second = await instance.startThread("saved-B", "你是角色 B");
+    policy = JSON.parse(await instance.run(second, "policy", () => {}));
+    expect(policy.threadParams.threadId).toBe("saved-B");
+    expect(policy.threadParams.baseInstructions).toContain("你是角色 B");
+    expect(policy.threadParams.baseInstructions).not.toContain("你是角色 A");
+    expect(policy.threadParams.config["features.shell_tool"]).toBe(false);
+  });
   it("isolates work policy and forwards progress without changing the chat default", async () => {
     const events: string[] = [];
     const instance = new CodexAppServer(

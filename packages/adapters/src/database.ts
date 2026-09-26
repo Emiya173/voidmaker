@@ -20,6 +20,50 @@ export class Database {
     await this.pool.query("SELECT 1");
   }
 
+  async selectedCharacter(): Promise<string> {
+    const result = await this.pool.query<{ selected_id: string }>(
+      "SELECT selected_id FROM character_settings WHERE id=true",
+    );
+    return result.rows[0]?.selected_id ?? "default";
+  }
+
+  async selectCharacter(id: string): Promise<void> {
+    await this.pool.query(
+      "INSERT INTO character_settings(id, selected_id) VALUES(true,$1) ON CONFLICT(id) DO UPDATE SET selected_id=$1",
+      [id],
+    );
+  }
+
+  async characterSession(characterId: string, revision: string): Promise<string> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Separate from the migration and long-lived work scheduler locks.
+      await client.query("SELECT pg_advisory_xact_lock(91244015)");
+      const found = await client.query<{ session_id: string }>(
+        "SELECT session_id FROM character_sessions WHERE character_id=$1 AND revision=$2",
+        [characterId, revision],
+      );
+      let id = found.rows[0]?.session_id;
+      if (!id) {
+        id = characterId === "default" ? DEFAULT_SESSION_ID : randomUUID();
+        await client.query("INSERT INTO sessions(id) VALUES($1) ON CONFLICT DO NOTHING", [id]);
+        await client.query("INSERT INTO character_sessions(character_id,revision,session_id) VALUES($1,$2,$3)", [
+          characterId,
+          revision,
+          id,
+        ]);
+      }
+      await client.query("COMMIT");
+      return id;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async close(): Promise<void> {
     await this.pool.end();
   }

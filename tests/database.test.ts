@@ -12,6 +12,20 @@ const database = new Database(connectionString);
 afterAll(async () => database.close());
 
 describe.skipIf(!connectionString)("PostgreSQL persistence", () => {
+  it("isolates character histories by definition revision while preserving the original default session", async () => {
+    await migrate(connectionString);
+    const id = `character-${randomUUID()}`;
+    const first = await database.characterSession(id, "v1");
+    await database.addMessage(first, "user", "only first character");
+    expect(await database.characterSession(id, "v1")).toBe(first);
+    const revised = await database.characterSession(id, "v2");
+    expect(revised).not.toBe(first);
+    expect(await database.listMessages(revised)).toEqual([]);
+    expect(await database.characterSession("default", "builtin-1")).toBe("00000000-0000-4000-8000-000000000001");
+    await database.selectCharacter(id);
+    expect(await database.selectedCharacter()).toBe(id);
+    await database.selectCharacter("default");
+  });
   it("resets desktop grants and proactive mode on restart while retaining preferences", async () => {
     await migrate(connectionString);
     const store = new DesktopStore(connectionString);

@@ -17,6 +17,13 @@ it.skipIf(!url)(
     const dir = await mkdtemp(join(tmpdir(), "voidmaker-host-test-"));
     const socketPath = join(dir, "host.sock");
     const binaryDir = join(dir, "bin");
+    const characterId = `role-${randomUUID()}`;
+    const charactersDirectory = join(dir, "characters");
+    await mkdir(join(charactersDirectory, characterId), { recursive: true });
+    await writeFile(
+      join(charactersDirectory, characterId, "character.json"),
+      JSON.stringify({ version: 1, id: characterId, name: "Fixture", persona: "角色测试" }),
+    );
     await mkdir(binaryDir);
     await writeFile(
       join(binaryDir, "codex"),
@@ -46,6 +53,7 @@ it.skipIf(!url)(
           DATABASE_URL: url,
           VOIDMAKER_SOCKET: socketPath,
           VOIDMAKER_VOICE_CONFIG: join(dir, "voice.json"),
+          VOIDMAKER_CHARACTERS_DIR: charactersDirectory,
           XDG_STATE_HOME: dir,
           XDG_RUNTIME_DIR: dir,
           PATH: `${binaryDir}:${process.env.PATH}`,
@@ -65,7 +73,7 @@ it.skipIf(!url)(
       await once(socket, "connect");
       events = [];
       createInterface({ input: socket }).on("line", (line) => events.push(JSON.parse(line) as ServerEvent));
-      send({ type: "hello", version: 4 });
+      send({ type: "hello", version: 5 });
       await expect.poll(() => events.some((e) => e.type === "snapshot")).toBe(true);
     }
     function send(value: unknown) {
@@ -159,6 +167,53 @@ it.skipIf(!url)(
       await waitStatus(approvalTask, "failed"); // Fixture returns a plain decision, not a successful structured result.
       expect((await detail(approvalTask)).approvals.at(-1)?.decision).toBe("decline");
       expect(events.filter((e) => e.type === "error")).toEqual([]);
+      const select = async (selectedId: string) => {
+        events = [];
+        send({ type: "character_select", id: selectedId });
+        await expect
+          .poll(() => events.some((e) => e.type === "snapshot" && e.character.selectedId === selectedId))
+          .toBe(true);
+        const snapshot = events.findLast((e) => e.type === "snapshot");
+        if (snapshot?.type !== "snapshot") throw new Error("missing character snapshot");
+        return snapshot;
+      };
+      const original = await select("default");
+      const empty = await select(characterId);
+      expect(empty.sessionId).not.toBe(original.sessionId);
+      expect(empty.messages).toEqual([]);
+      send({ type: "send", text: "hello" });
+      await expect.poll(() => events.some((e) => e.type === "message" && e.message.role === "assistant")).toBe(true);
+      await expect.poll(() => events.some((e) => e.type === "status" && e.status === "idle")).toBe(true);
+      await expect
+        .poll(() =>
+          events.some(
+            (e) =>
+              e.type === "character" &&
+              e.character.presentation.state === "idle" &&
+              !e.character.presentation.subtitle &&
+              e.character.presentation.mouth === 0,
+          ),
+        )
+        .toBe(true);
+      expect((await select("default")).messages).toEqual(original.messages);
+      expect((await select(characterId)).messages.map((m) => m.text)).toEqual(["hello", "你好"]);
+      events = [];
+      send({ type: "send", text: "wait" });
+      await expect.poll(() => events.some((e) => e.type === "message" && e.message.role === "user")).toBe(true);
+      send({ type: "character_select", id: "default" });
+      await expect.poll(() => events.some((e) => e.type === "error" && e.message.includes("停止"))).toBe(true);
+      send({ type: "stop" });
+      await expect.poll(() => events.some((e) => e.type === "status" && e.status === "idle")).toBe(true);
+      socket?.destroy();
+      const closing = once(child as ChildProcess, "exit");
+      child?.kill("SIGTERM");
+      await closing;
+      start();
+      await connect();
+      const characterRestored = events.find((e) => e.type === "snapshot");
+      expect(characterRestored?.type === "snapshot" && characterRestored.character.selectedId).toBe(characterId);
+      expect(characterRestored?.type === "snapshot" && characterRestored.sessionId).toBe(empty.sessionId);
+      await select("default");
     } finally {
       socket?.destroy();
       if (child && child.exitCode === null && child.signalCode === null) {
@@ -169,5 +224,5 @@ it.skipIf(!url)(
       await rm(dir, { recursive: true });
     }
   },
-  20_000,
+  30_000,
 );

@@ -6,8 +6,9 @@ import { dirname, join } from "node:path";
 import { openAecSession } from "../../../packages/adapters/src/aec-session.js";
 import { inspectArtifact, projectPath } from "../../../packages/adapters/src/artifacts.js";
 import { captureAudio, playAudio } from "../../../packages/adapters/src/audio-process.js";
+import { type CharacterCatalog, loadCharacters } from "../../../packages/adapters/src/characters.js";
 import { CodexAppServer } from "../../../packages/adapters/src/codex.js";
-import { Database, DEFAULT_SESSION_ID } from "../../../packages/adapters/src/database.js";
+import { Database } from "../../../packages/adapters/src/database.js";
 import { desktopAdapters } from "../../../packages/adapters/src/desktop.js";
 import { suggestDesktop } from "../../../packages/adapters/src/desktop-codex.js";
 import { DesktopStore } from "../../../packages/adapters/src/desktop-store.js";
@@ -15,8 +16,10 @@ import { synthesize, transcribe } from "../../../packages/adapters/src/speech-ht
 import { WorkStore } from "../../../packages/adapters/src/work-store.js";
 import { clientCommand, PROTOCOL_VERSION, type ServerEvent } from "../../../packages/contracts/src/protocol.js";
 import type { VoiceConfig } from "../../../packages/contracts/src/voice.js";
+import { characterInstructions } from "../../../packages/domain/src/character.js";
 import { type ConversationState, initialConversation, transition } from "../../../packages/domain/src/conversation.js";
 import { contextPrompt } from "../../../packages/domain/src/desktop.js";
+import { CharacterController } from "./character.js";
 import { loadVoiceConfig } from "./config.js";
 import { DesktopController } from "./desktop.js";
 import { migrate } from "./migrate.js";
@@ -46,7 +49,7 @@ class Host {
     string,
     { description: string; answer: (decision: "accept" | "acceptForSession" | "decline") => void }
   >();
-  private threadId = "";
+  private readonly character: CharacterController;
   private readonly codex: CodexAppServer;
   private readonly voice: VoiceController;
   private readonly work: WorkManager;
@@ -59,6 +62,7 @@ class Host {
     private readonly database: Database,
     chatDirectory: string,
     voiceConfig: VoiceConfig,
+    characters: CharacterCatalog,
   ) {
     this.work = new WorkManager(
       new WorkStore(process.env.DATABASE_URL),
@@ -75,12 +79,31 @@ class Host {
       ["app-server", "--stdio"],
       { restricted: true },
     );
+    this.character = new CharacterController(characters, {
+      idle: () =>
+        this.state.phase === "idle" && this.voice.snapshot.phase === "idle" && !this.voice.snapshot.continuous,
+      prepare: async (character, signal) => {
+        const sessionId = await this.database.characterSession(character.id, character.revision);
+        signal.throwIfAborted();
+        const oldThread = await this.database.ensureSession(sessionId);
+        signal.throwIfAborted();
+        const threadId = await this.codex.startThread(
+          oldThread,
+          characterInstructions(character.name, character.persona),
+        );
+        signal.throwIfAborted();
+        if (threadId !== oldThread) await this.database.setCodexThread(sessionId, threadId);
+        return { sessionId, threadId };
+      },
+      persist: (id) => this.database.selectCharacter(id),
+      publish: () => this.publishCharacter(),
+    });
     this.desktop = new DesktopController(join(dirname(socketPath), "desktop"), {
       adapters: desktopAdapters(),
       store: this.desktopStore,
       publish: (desktop) => this.broadcast({ type: "desktop", desktop }),
       present: () => [...this.presence.values()].some((idle) => !idle),
-      idle: () => this.state.phase === "idle" && this.voice.snapshot.phase === "idle",
+      idle: () => !this.character.changing && this.state.phase === "idle" && this.voice.snapshot.phase === "idle",
       suggest: (context, signal) => suggestDesktop(chatDirectory, context, signal),
       revoked: () => {
         if (this.desktopReplyGeneration === this.state.generation) void this.stop();
@@ -95,13 +118,16 @@ class Host {
         },
         synthesize: (text, signal) => {
           if (!voiceConfig.tts) throw new Error("未配置 TTS");
-          return synthesize(text, voiceConfig.tts, signal);
+          return synthesize(text, { ...voiceConfig.tts, ...this.character.current.voice }, signal);
         },
         play: (wav, signal, onProgress) =>
           playAudio(wav, signal, onProgress, voiceConfig.aec ? { outputTarget: voiceConfig.aec.outputTarget } : {}),
         ...(voiceConfig.aec ? { openSession: (signal: AbortSignal) => openAecSession(voiceConfig, signal) } : {}),
         submit: (text) => this.sendMessage(text),
-        publish: (voice) => this.broadcast({ type: "voice", voice }),
+        publish: (voice) => {
+          this.broadcast({ type: "voice", voice });
+          this.publishCharacter();
+        },
       },
       Boolean(voiceConfig.asr),
       Boolean(voiceConfig.tts),
@@ -112,13 +138,15 @@ class Host {
   async start(): Promise<void> {
     await this.work.start();
     await this.desktop.start();
-    const oldThread = await this.database.ensureSession();
     await this.codex.start();
-    this.threadId = await this.codex.startThread(oldThread);
-    if (this.threadId !== oldThread) await this.database.setCodexThread(DEFAULT_SESSION_ID, this.threadId);
+    const selected = await this.database.selectedCharacter();
+    await this.character.select(
+      this.character.catalog.entries.some((entry) => entry.id === selected) ? selected : "default",
+    );
   }
 
   async close(): Promise<void> {
+    await this.character.close();
     for (const approval of this.approvals.values()) approval.answer("decline");
     for (const client of this.clients) client.destroy();
     await this.desktop.close();
@@ -173,20 +201,16 @@ class Host {
     switch (command.type) {
       case "hello": {
         this.send(client, { type: "desktop", desktop: this.desktop.snapshot });
-        const messages = await this.database.listMessages(DEFAULT_SESSION_ID);
-        this.send(client, {
-          type: "snapshot",
-          version: PROTOCOL_VERSION,
-          sessionId: DEFAULT_SESSION_ID,
-          messages,
-          status: this.state.phase,
-          draft: this.state.phase === "thinking" ? this.state.draft : "",
-          voice: this.voice.snapshot,
-        });
+        await this.sendSnapshot(client);
         for (const [requestId, approval] of this.approvals) {
           this.send(client, { type: "approval", requestId, description: approval.description });
         }
         this.send(client, { type: "work_list", ...(await this.work.store.list()) });
+        return;
+      }
+      case "character_select": {
+        await this.character.select(command.id);
+        await Promise.all([...this.clients].map((connection) => this.sendSnapshot(connection)));
         return;
       }
       case "desktop_grant":
@@ -258,6 +282,7 @@ class Host {
         await this.stop();
         return;
       case "voice_start":
+        if (this.character.changing) throw new Error("正在切换角色，请稍候");
         if (this.state.phase !== "idle") throw new Error("请先停止当前回复");
         this.voice.listen(command.continuous);
         return;
@@ -271,6 +296,7 @@ class Host {
   }
 
   private async sendMessage(text: string, desktopId?: string): Promise<void> {
+    if (this.character.changing) throw new Error("正在切换角色，请稍候");
     if (this.state.phase !== "idle") throw new Error("请先停止当前回复");
     const voiceGeneration = this.voice.beginReply();
     this.state = transition(this.state, { type: "send" });
@@ -283,14 +309,14 @@ class Host {
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
       const prompt = shared ? contextPrompt(text, shared.context) : text;
       const message = await this.database.addMessage(
-        DEFAULT_SESSION_ID,
+        this.character.binding.sessionId,
         "user",
         shared ? `${text}\n\n[附带桌面上下文]\n${shared.context}` : text,
       );
       this.broadcast({ type: "message", message });
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
       const reply = await this.codex.run(
-        this.threadId,
+        this.character.binding.threadId,
         prompt,
         (delta) => {
           if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
@@ -301,7 +327,7 @@ class Host {
       );
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
       if (reply.trim()) {
-        const assistantMessage = await this.database.addMessage(DEFAULT_SESSION_ID, "assistant", reply);
+        const assistantMessage = await this.database.addMessage(this.character.binding.sessionId, "assistant", reply);
         this.broadcast({ type: "message", message: assistantMessage });
         if (this.state.phase === "thinking" && this.state.generation === generation)
           await this.voice.speak(reply, voiceGeneration);
@@ -376,8 +402,33 @@ class Host {
     if (client.writable) client.write(`${JSON.stringify(event)}\n`);
   }
 
+  private publishCharacter(): void {
+    this.broadcast({
+      type: "character",
+      character: this.character.snapshot(this.voice.snapshot, this.state.phase === "thinking"),
+    });
+  }
+
+  private async sendSnapshot(client: Socket): Promise<void> {
+    const binding = this.character.binding;
+    const messages = await this.database.listMessages(binding.sessionId);
+    if (binding !== this.character.binding) return this.sendSnapshot(client);
+    this.send(client, {
+      type: "snapshot",
+      version: PROTOCOL_VERSION,
+      sessionId: binding.sessionId,
+      messages,
+      status: this.state.phase,
+      draft: this.state.phase === "thinking" ? this.state.draft : "",
+      voice: this.voice.snapshot,
+      character: this.character.snapshot(this.voice.snapshot, this.state.phase === "thinking"),
+    });
+  }
+
   private broadcast(event: ServerEvent): void {
     for (const client of this.clients) this.send(client, event);
+    // Voice can finish before the conversation does; publish the final idle projection too.
+    if (event.type === "status") this.publishCharacter();
   }
 }
 
@@ -387,7 +438,7 @@ async function main(): Promise<void> {
   const chatDirectory = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "voidmaker", "chat");
   await mkdir(chatDirectory, { recursive: true, mode: 0o700 });
   const database = new Database(process.env.DATABASE_URL);
-  const host = new Host(database, chatDirectory, await loadVoiceConfig());
+  const host = new Host(database, chatDirectory, await loadVoiceConfig(), await loadCharacters());
   const server = createServer((client) => host.attach(client));
   try {
     await database.check();
