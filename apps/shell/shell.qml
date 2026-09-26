@@ -43,9 +43,11 @@ ShellRoot {
         let event
         try { event = JSON.parse(line) } catch (error) { return }
         workPanel.receive(event)
+        // Process snapshot after updating connection and selection bindings below.
+        if (event.type !== "snapshot") historyPanel.receive(event)
         switch (event.type) {
         case "snapshot":
-            if (event.version !== 5) { errorText = "界面与服务协议版本不匹配"; return }
+            if (event.version !== 6) { errorText = "界面与服务协议版本不匹配"; return }
             if (sessionId !== event.sessionId) input.text = ""
             sessionId = event.sessionId
             character = event.character
@@ -55,6 +57,7 @@ ShellRoot {
             draft = event.draft || ""
             setVoice(event.voice)
             conversation.positionViewAtEnd()
+            historyPanel.receive(event)
             break
         case "desktop": root.desktop = event.desktop; root.send({type: "desktop_presence", idle: activity.isIdle}); break
         case "voice": setVoice(event.voice); break
@@ -76,7 +79,7 @@ ShellRoot {
         path: Quickshell.env("VOIDMAKER_SOCKET") || (Quickshell.env("XDG_RUNTIME_DIR") + "/voidmaker/host.sock")
         onMessage: line => root.receive(line)
         onConnectedChanged: {
-            if (connected) { root.errorText = ""; root.send({ type: "hello", version: 5 }); if (workPanel.selectedId) root.send({type: "work_get", id: workPanel.selectedId}) }
+            if (connected) { root.errorText = ""; root.send({ type: "hello", version: 6 }); if (workPanel.selectedId) root.send({type: "work_get", id: workPanel.selectedId}) }
             else { root.status = "offline"; root.approvalId = ""; root.voice = null; root.desktop = null }
         }
     }
@@ -124,7 +127,7 @@ ShellRoot {
             Label {
                 Layout.fillWidth: true
                 visible: !!root.character && (root.character.changing || root.character.warnings.length > 0)
-                text: root.character && root.character.changing ? "正在切换角色…"
+                text: root.character && root.character.changing ? "正在更新对话上下文…"
                     : root.character ? root.character.warnings.join("\n") : ""
                 color: "#dccb9a"; wrapMode: Text.Wrap; textFormat: Text.PlainText
                 maximumLineCount: 2; elide: Text.ElideRight
@@ -136,6 +139,15 @@ ShellRoot {
                 TabButton { text: "对话" }
                 TabButton { text: "桌面" + (root.desktop && root.desktop.suggestion ? " · 建议" : "") }
                 TabButton { text: "后台任务" + (workPanel.works.some(w => w.status === "awaiting_permission") ? " · 待审批" : "") }
+                TabButton { text: "会话与记忆" }
+            }
+            HistoryPanel {
+                id: historyPanel
+                Layout.fillWidth: true; Layout.fillHeight: true
+                visible: tabs.currentIndex === 3
+                online: root.status !== "offline"
+                canEdit: root.status === "idle" && root.characterReady && !!root.voice && root.voice.phase === "idle" && !root.voice.continuous
+                onCommand: value => root.send(value)
             }
             DesktopPanel {
                 Layout.fillWidth: true; Layout.fillHeight: true

@@ -1,12 +1,14 @@
 import { z } from "zod";
 import { type CharacterSnapshot, characterId } from "./character.js";
 import { type DesktopSnapshot, desktopCommands } from "./desktop.js";
+import { type HistoryEvent, historyCommands } from "./history.js";
 import type { VoiceSnapshot } from "./voice.js";
 import { type Project, type WorkDetail, type WorkItem, workCommands } from "./work.js";
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 export const clientCommand = z.discriminatedUnion("type", [
+  ...historyCommands,
   ...workCommands,
   ...desktopCommands,
   z.object({ type: z.literal("character_select"), id: characterId }),
@@ -32,6 +34,7 @@ export type Message = {
 };
 
 export type ServerEvent =
+  | HistoryEvent
   | {
       type: "snapshot";
       version: number;

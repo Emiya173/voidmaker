@@ -6,19 +6,26 @@ import { dirname, join } from "node:path";
 import { openAecSession } from "../../../packages/adapters/src/aec-session.js";
 import { inspectArtifact, projectPath } from "../../../packages/adapters/src/artifacts.js";
 import { captureAudio, playAudio } from "../../../packages/adapters/src/audio-process.js";
-import { type CharacterCatalog, loadCharacters } from "../../../packages/adapters/src/characters.js";
+import { type Character, type CharacterCatalog, loadCharacters } from "../../../packages/adapters/src/characters.js";
 import { CodexAppServer } from "../../../packages/adapters/src/codex.js";
 import { Database } from "../../../packages/adapters/src/database.js";
 import { desktopAdapters } from "../../../packages/adapters/src/desktop.js";
 import { suggestDesktop } from "../../../packages/adapters/src/desktop-codex.js";
 import { DesktopStore } from "../../../packages/adapters/src/desktop-store.js";
+import { HistoryStore } from "../../../packages/adapters/src/history-store.js";
 import { synthesize, transcribe } from "../../../packages/adapters/src/speech-http.js";
 import { WorkStore } from "../../../packages/adapters/src/work-store.js";
-import { clientCommand, PROTOCOL_VERSION, type ServerEvent } from "../../../packages/contracts/src/protocol.js";
+import {
+  type ClientCommand,
+  clientCommand,
+  PROTOCOL_VERSION,
+  type ServerEvent,
+} from "../../../packages/contracts/src/protocol.js";
 import type { VoiceConfig } from "../../../packages/contracts/src/voice.js";
 import { characterInstructions } from "../../../packages/domain/src/character.js";
 import { type ConversationState, initialConversation, transition } from "../../../packages/domain/src/conversation.js";
 import { contextPrompt } from "../../../packages/domain/src/desktop.js";
+import { memoryInstructions } from "../../../packages/domain/src/memory.js";
 import { CharacterController } from "./character.js";
 import { loadVoiceConfig } from "./config.js";
 import { DesktopController } from "./desktop.js";
@@ -50,6 +57,7 @@ class Host {
     { description: string; answer: (decision: "accept" | "acceptForSession" | "decline") => void }
   >();
   private readonly character: CharacterController;
+  private readonly history = new HistoryStore(process.env.DATABASE_URL);
   private readonly codex: CodexAppServer;
   private readonly voice: VoiceController;
   private readonly work: WorkManager;
@@ -82,20 +90,16 @@ class Host {
     this.character = new CharacterController(characters, {
       idle: () =>
         this.state.phase === "idle" && this.voice.snapshot.phase === "idle" && !this.voice.snapshot.continuous,
-      prepare: async (character, signal) => {
-        const sessionId = await this.database.characterSession(character.id, character.revision);
-        signal.throwIfAborted();
-        const oldThread = await this.database.ensureSession(sessionId);
-        signal.throwIfAborted();
-        const threadId = await this.codex.startThread(
-          oldThread,
-          characterInstructions(character.name, character.persona),
-        );
-        signal.throwIfAborted();
-        if (threadId !== oldThread) await this.database.setCodexThread(sessionId, threadId);
-        return { sessionId, threadId };
+      prepare: async (character, signal, selectedSession) => {
+        const sessionId = selectedSession ?? (await this.database.characterSession(character.id, character.revision));
+        await this.history.session(character, sessionId, true);
+        return { sessionId, threadId: await this.prepareThread(character, sessionId, signal) };
       },
-      persist: (id) => this.database.selectCharacter(id),
+      persist: (id, binding) => {
+        const character = characters.entries.find((entry) => entry.id === id);
+        if (!character) throw new Error("角色不存在");
+        return this.history.select(character, binding.sessionId);
+      },
       publish: () => this.publishCharacter(),
     });
     this.desktop = new DesktopController(join(dirname(socketPath), "desktop"), {
@@ -147,6 +151,7 @@ class Host {
 
   async close(): Promise<void> {
     await this.character.close();
+    await this.history.close();
     for (const approval of this.approvals.values()) approval.answer("decline");
     for (const client of this.clients) client.destroy();
     await this.desktop.close();
@@ -199,6 +204,18 @@ class Host {
     if (!parsed.success) throw new Error("无效或不兼容的命令");
     const command = parsed.data;
     switch (command.type) {
+      case "session_list":
+      case "session_create":
+      case "session_select":
+      case "session_rename":
+      case "session_archive":
+      case "session_delete":
+      case "history_list":
+      case "memory_list":
+      case "memory_save":
+      case "memory_delete":
+        await this.handleHistory(client, command);
+        return;
       case "hello": {
         this.send(client, { type: "desktop", desktop: this.desktop.snapshot });
         await this.sendSnapshot(client);
@@ -282,7 +299,7 @@ class Host {
         await this.stop();
         return;
       case "voice_start":
-        if (this.character.changing) throw new Error("正在切换角色，请稍候");
+        if (this.character.changing) throw new Error("正在更新对话上下文，请稍候");
         if (this.state.phase !== "idle") throw new Error("请先停止当前回复");
         this.voice.listen(command.continuous);
         return;
@@ -295,28 +312,122 @@ class Host {
     }
   }
 
+  private async prepareThread(character: Character, sessionId: string, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
+    const oldThread = await this.database.ensureSession(sessionId);
+    const memories = await this.history.memories(character, sessionId);
+    signal?.throwIfAborted();
+    const threadId = await this.codex.startThread(
+      oldThread,
+      characterInstructions(character.name, character.persona) + memoryInstructions(memories, sessionId),
+    );
+    signal?.throwIfAborted();
+    if (threadId !== oldThread) await this.database.setCodexThread(sessionId, threadId);
+    return threadId;
+  }
+
+  private async handleHistory(client: Socket, command: ClientCommand): Promise<boolean> {
+    const scope = this.character.current;
+    const binding = this.character.binding;
+    const send = (event: ServerEvent) => {
+      if (scope === this.character.current && binding === this.character.binding) this.send(client, event);
+    };
+    switch (command.type) {
+      case "session_list":
+        send({
+          type: "session_list",
+          requestId: command.requestId,
+          characterId: scope.id,
+          page: await this.history.list(scope, command.archived, command.query, command.before),
+        });
+        return true;
+      case "history_list":
+        send({
+          type: "history_list",
+          requestId: command.requestId,
+          sessionId: command.sessionId,
+          page: await this.history.messages(scope, command.sessionId, command.query, command.before),
+        });
+        return true;
+      case "memory_list":
+        send({
+          type: "memory_list",
+          requestId: command.requestId,
+          sessionId: command.sessionId,
+          items: await this.history.memories(scope, command.sessionId),
+        });
+        return true;
+      case "session_create":
+        await this.character.select(scope.id, () => this.history.create(scope, command.title));
+        break;
+      case "session_select":
+        await this.character.select(scope.id, command.id);
+        break;
+      case "session_rename":
+      case "session_archive":
+      case "session_delete":
+        await this.character.edit(async (signal) => {
+          signal.throwIfAborted();
+          await this.history.change(
+            scope,
+            command.id,
+            command.revision,
+            command.type === "session_rename"
+              ? { title: command.title }
+              : command.type === "session_archive"
+                ? { archived: command.archived }
+                : { delete: true },
+          );
+        });
+        break;
+      case "memory_save":
+      case "memory_delete":
+        await this.character.edit(async (signal) => {
+          signal.throwIfAborted();
+          if (command.sessionId !== binding.sessionId) throw new Error("会话已切换，请刷新记忆");
+          await this.history.saveMemory(
+            scope,
+            command.sessionId,
+            command.type === "memory_delete" ? { id: command.id, revision: command.revision, delete: true } : command,
+          );
+        });
+        break;
+      default:
+        return false;
+    }
+    if (command.type === "session_create" || command.type === "session_select")
+      await Promise.all([...this.clients].map((connection) => this.sendSnapshot(connection)));
+    else this.broadcast({ type: "library_changed" });
+    return true;
+  }
+
   private async sendMessage(text: string, desktopId?: string): Promise<void> {
-    if (this.character.changing) throw new Error("正在切换角色，请稍候");
+    if (this.character.changing) throw new Error("正在更新对话上下文，请稍候");
     if (this.state.phase !== "idle") throw new Error("请先停止当前回复");
+    const binding = this.character.binding;
+    const character = this.character.current;
     const voiceGeneration = this.voice.beginReply();
     this.state = transition(this.state, { type: "send" });
     const generation = this.state.generation;
     if (desktopId) this.desktopReplyGeneration = generation;
     this.broadcast({ type: "status", status: "thinking" });
     try {
+      const oldThread = await this.database.ensureSession(binding.sessionId);
+      const threadId = oldThread ?? (await this.prepareThread(character, binding.sessionId));
+      if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
       const shared = desktopId ? await this.desktop.share(desktopId) : undefined;
       shared?.signal.throwIfAborted();
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
       const prompt = shared ? contextPrompt(text, shared.context) : text;
       const message = await this.database.addMessage(
-        this.character.binding.sessionId,
+        binding.sessionId,
         "user",
         shared ? `${text}\n\n[附带桌面上下文]\n${shared.context}` : text,
       );
       this.broadcast({ type: "message", message });
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
       const reply = await this.codex.run(
-        this.character.binding.threadId,
+        threadId,
         prompt,
         (delta) => {
           if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
@@ -327,7 +438,7 @@ class Host {
       );
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
       if (reply.trim()) {
-        const assistantMessage = await this.database.addMessage(this.character.binding.sessionId, "assistant", reply);
+        const assistantMessage = await this.database.addMessage(binding.sessionId, "assistant", reply);
         this.broadcast({ type: "message", message: assistantMessage });
         if (this.state.phase === "thinking" && this.state.generation === generation)
           await this.voice.speak(reply, voiceGeneration);

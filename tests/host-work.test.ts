@@ -51,6 +51,7 @@ it.skipIf(!url)(
         env: {
           ...process.env,
           DATABASE_URL: url,
+          FAKE_CODEX_UNIQUE_THREADS: "1",
           VOIDMAKER_SOCKET: socketPath,
           VOIDMAKER_VOICE_CONFIG: join(dir, "voice.json"),
           VOIDMAKER_CHARACTERS_DIR: charactersDirectory,
@@ -73,7 +74,7 @@ it.skipIf(!url)(
       await once(socket, "connect");
       events = [];
       createInterface({ input: socket }).on("line", (line) => events.push(JSON.parse(line) as ServerEvent));
-      send({ type: "hello", version: 5 });
+      send({ type: "hello", version: 6 });
       await expect.poll(() => events.some((e) => e.type === "snapshot")).toBe(true);
     }
     function send(value: unknown) {
@@ -197,10 +198,80 @@ it.skipIf(!url)(
         .toBe(true);
       expect((await select("default")).messages).toEqual(original.messages);
       expect((await select(characterId)).messages.map((m) => m.text)).toEqual(["hello", "你好"]);
+      const exchange = async (command: unknown, predicate: (event: ServerEvent) => boolean) => {
+        events = [];
+        send(command);
+        await expect.poll(() => events.some(predicate), { timeout: 5000 }).toBe(true);
+        return events.findLast(predicate);
+      };
+      const created = await exchange(
+        { type: "session_create", title: "second conversation" },
+        (e) => e.type === "snapshot" && e.sessionId !== empty.sessionId,
+      );
+      if (created?.type !== "snapshot") throw new Error("missing session snapshot");
+      expect(created.messages).toEqual([]);
+      await exchange(
+        {
+          type: "memory_save",
+          sessionId: created.sessionId,
+          scope: "session",
+          text: "LOCAL_MEMORY_FIXTURE",
+          enabled: true,
+        },
+        (e) => e.type === "library_changed",
+      );
+      await exchange({ type: "send", text: "policy" }, (e) => e.type === "status" && e.status === "idle");
+      const policy = events.findLast((e) => e.type === "message" && e.message.role === "assistant");
+      if (policy?.type !== "message") throw new Error("missing policy reply");
+      expect(JSON.parse(policy.message.text).threadParams.baseInstructions).toContain("LOCAL_MEMORY_FIXTURE");
+      const threadWithMemory = JSON.parse(policy.message.text).turnParams.threadId;
+      const memories = await exchange(
+        { type: "memory_list", sessionId: created.sessionId, requestId: "memories" },
+        (e) => e.type === "memory_list",
+      );
+      if (memories?.type !== "memory_list" || !memories.items[0]) throw new Error("missing memories");
+      await exchange(
+        {
+          type: "memory_delete",
+          sessionId: created.sessionId,
+          id: memories.items[0].id,
+          revision: memories.items[0].revision,
+        },
+        (e) => e.type === "library_changed",
+      );
+      await exchange({ type: "send", text: "policy" }, (e) => e.type === "status" && e.status === "idle");
+      const cleared = events.findLast((e) => e.type === "message" && e.message.role === "assistant");
+      if (cleared?.type !== "message") throw new Error("missing cleared reply");
+      expect(JSON.parse(cleared.message.text).threadParams.baseInstructions).not.toContain("LOCAL_MEMORY_FIXTURE");
+      expect(JSON.parse(cleared.message.text).turnParams.threadId).not.toBe(threadWithMemory);
+      const back = await exchange(
+        { type: "session_select", id: empty.sessionId },
+        (e) => e.type === "snapshot" && e.sessionId === empty.sessionId,
+      );
+      expect(back?.type === "snapshot" && back.messages.map((m) => m.text)).toEqual(["hello", "你好"]);
+      await exchange(
+        { type: "session_archive", id: created.sessionId, revision: 0, archived: true },
+        (e) => e.type === "library_changed",
+      );
+      await exchange({ type: "session_select", id: created.sessionId }, (e) => e.type === "error");
+      const archived = await exchange(
+        { type: "history_list", sessionId: created.sessionId, requestId: "archived", query: "policy" },
+        (e) => e.type === "history_list",
+      );
+      expect(archived?.type === "history_list" && archived.page.items.filter((m) => m.role === "user")).toHaveLength(2);
       events = [];
       send({ type: "send", text: "wait" });
       await expect.poll(() => events.some((e) => e.type === "message" && e.message.role === "user")).toBe(true);
       send({ type: "character_select", id: "default" });
+      await expect.poll(() => events.some((e) => e.type === "error" && e.message.includes("停止"))).toBe(true);
+      events = [];
+      send({
+        type: "memory_save",
+        sessionId: empty.sessionId,
+        scope: "character",
+        text: "busy must reject",
+        enabled: true,
+      });
       await expect.poll(() => events.some((e) => e.type === "error" && e.message.includes("停止"))).toBe(true);
       send({ type: "stop" });
       await expect.poll(() => events.some((e) => e.type === "status" && e.status === "idle")).toBe(true);

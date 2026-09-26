@@ -27,7 +27,7 @@ flowchart LR
 ```
 
 - `packages/domain/src/work.ts`：状态转换规则，不访问数据库、网络或进程。
-- `packages/contracts/src/work.ts`：IPC 命令、状态和投影类型。工作命令自 v3 引入；当前整体协议为 v5。
+- `packages/contracts/src/work.ts`：IPC 命令、状态和投影类型。工作命令自 v3 引入；当前整体协议为 v6。
 - `packages/adapters/src/work-store.ts`：参数化 PostgreSQL SQL、行锁、事务及调度器 advisory lock。
   任务账本使用显式 SQL，便于审查状态更新与事件写入的原子边界；迁移文件是数据库结构的来源。
 - `apps/host/src/work.ts`：单后台执行槽、持久队列、审批计时器、进程生命周期、事件排序和产物登记。

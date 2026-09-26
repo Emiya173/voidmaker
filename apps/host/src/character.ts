@@ -11,8 +11,8 @@ import { characterPresentation } from "../../../packages/domain/src/character.js
 type Binding = Readonly<{ sessionId: string; threadId: string }>;
 type Ports = Readonly<{
   idle: () => boolean;
-  prepare: (character: Character, signal: AbortSignal) => Promise<Binding>;
-  persist: (id: string) => Promise<void>;
+  prepare: (character: Character, signal: AbortSignal, sessionId?: string) => Promise<Binding>;
+  persist: (id: string, binding: Binding) => Promise<void>;
   publish: () => void;
 }>;
 export class CharacterController {
@@ -35,25 +35,39 @@ export class CharacterController {
       presentation: characterPresentation(this.current.portraits, voice, thinking, this.current.layered),
     };
   }
-  select(id: string): Promise<void> {
+  select(id: string, session?: string | (() => Promise<string>)): Promise<void> {
     this.controller.signal.throwIfAborted();
     if (this.changing || !this.ports.idle()) throw new Error("请先停止当前对话或录音，再切换角色");
     const character = this.catalog.entries.find((entry) => entry.id === id);
     if (!character) throw new Error("角色不存在或配置无效");
-    if (this.current === character && this.binding.threadId) return Promise.resolve();
+    if (!session && this.current === character && this.binding.threadId) return Promise.resolve();
+    return this.edit((signal) => this.change(character, signal, session));
+  }
+  edit(effect: (signal: AbortSignal) => Promise<void>): Promise<void> {
+    this.controller.signal.throwIfAborted();
+    if (this.changing || !this.ports.idle()) throw new Error("请先停止当前对话或录音，再修改会话或记忆");
     this.changing = true;
     this.ports.publish();
-    this.pending = this.change(character);
+    this.pending = this.perform(effect);
     return this.pending;
   }
-  private async change(character: Character): Promise<void> {
+  private async change(
+    character: Character,
+    signal: AbortSignal,
+    session?: string | (() => Promise<string>),
+  ): Promise<void> {
+    const sessionId = typeof session === "function" ? await session() : session;
+    signal.throwIfAborted();
+    const binding = await this.ports.prepare(character, signal, sessionId);
+    this.controller.signal.throwIfAborted();
+    await this.ports.persist(character.id, binding);
+    this.controller.signal.throwIfAborted();
+    this.current = character;
+    this.binding = binding;
+  }
+  private async perform(effect: (signal: AbortSignal) => Promise<void>): Promise<void> {
     try {
-      const binding = await this.ports.prepare(character, this.controller.signal);
-      this.controller.signal.throwIfAborted();
-      await this.ports.persist(character.id);
-      this.controller.signal.throwIfAborted();
-      this.current = character;
-      this.binding = binding;
+      await effect(this.controller.signal);
     } finally {
       this.changing = false;
       if (!this.controller.signal.aborted) this.ports.publish();

@@ -54,6 +54,10 @@ export class Database {
           id,
         ]);
       }
+      await client.query(
+        "INSERT INTO chat_sessions(id,character_id,character_revision,title) VALUES($1,$2,$3,'新对话') ON CONFLICT DO NOTHING",
+        [id, characterId, revision],
+      );
       await client.query("COMMIT");
       return id;
     } catch (error) {
