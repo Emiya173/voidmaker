@@ -1,5 +1,23 @@
 import type { DesktopGrants, DesktopPolicy, DesktopSource } from "../../contracts/src/desktop.js";
 
+type WindowFocus = Readonly<{
+  is_focused: boolean;
+  focus_timestamp: Readonly<{ secs: number; nanos: number }> | null;
+}>;
+
+export function selectDesktopWindow<T extends WindowFocus>(windows: readonly T[]): T | null {
+  const focused = windows.find((window) => window.is_focused);
+  if (focused) return focused;
+  return windows.reduce<T | null>((latest, window) => {
+    const time = window.focus_timestamp;
+    const previous = latest?.focus_timestamp;
+    if (!time) return latest;
+    return !previous || time.secs > previous.secs || (time.secs === previous.secs && time.nanos > previous.nanos)
+      ? window
+      : latest;
+  }, null);
+}
+
 export function hasDesktopGrant(grants: DesktopGrants, source: DesktopSource, now: number): boolean {
   return grants[source] > now;
 }

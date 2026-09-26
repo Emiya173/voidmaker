@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopController, type DesktopPorts } from "../apps/host/src/desktop.js";
 import { desktopAdapters, desktopCommand } from "../packages/adapters/src/desktop.js";
 import { desktopPolicy, noDesktopGrants } from "../packages/contracts/src/desktop.js";
-import { excludedApp, observationPause } from "../packages/domain/src/desktop.js";
+import { excludedApp, observationPause, selectDesktopWindow } from "../packages/domain/src/desktop.js";
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -64,6 +64,16 @@ async function fixture() {
 }
 
 describe("desktop grants and observation", () => {
+  it("updates the waiting message immediately after authorization and shutdown", async () => {
+    const f = await fixture();
+    await f.controller.configure(desktopPolicy.parse({ proactive: true }));
+    expect(f.controller.snapshot.pauseReason).toContain("授权");
+    await f.controller.grant("window", 15);
+    expect(f.controller.snapshot.pauseReason).toBe("等待下一次观察");
+    expect(f.ports.suggest).not.toHaveBeenCalled();
+    await f.controller.revoke();
+    expect(f.controller.snapshot.pauseReason).toBe("主动观察已关闭");
+  });
   it("gates overnight hours, equal hours, exclusions and denied sources", () => {
     const grants = { ...noDesktopGrants, window: 100 };
     const policy = desktopPolicy.parse({ proactive: true, startHour: 22, endHour: 6 });
@@ -164,6 +174,30 @@ describe("desktop grants and observation", () => {
 });
 
 describe("desktop process boundaries", () => {
+  it("uses the compositor focus timestamp when the assistant panel owns keyboard focus", async () => {
+    const windows = [
+      { id: 90, app_id: "older", title: "older", is_focused: false, focus_timestamp: { secs: 4, nanos: 999 } },
+      { id: 2, app_id: "latest", title: "latest", is_focused: false, focus_timestamp: { secs: 5, nanos: 1 } },
+      { id: 100, app_id: "never", title: "never", is_focused: false, focus_timestamp: null },
+    ];
+    expect(selectDesktopWindow(windows)?.id).toBe(2);
+    expect(selectDesktopWindow(windows.map((w) => ({ ...w, is_focused: w.id === 90 })))?.id).toBe(90);
+    expect(selectDesktopWindow([{ is_focused: false, focus_timestamp: null }])).toBeNull();
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(Buffer.from("null"))
+      .mockResolvedValueOnce(Buffer.from(JSON.stringify(windows)));
+    const selected = await desktopAdapters(run).window(new AbortController().signal);
+    expect(selected).toEqual({ id: 2, app_id: "latest", title: "latest", selection: "recent" });
+    expect(run.mock.calls[1]?.[1]).toEqual(["msg", "--json", "windows"]);
+    const abort = new AbortController();
+    const cancelling = vi.fn(async () => {
+      abort.abort();
+      return Buffer.from("null");
+    });
+    await expect(desktopAdapters(cancelling).window(abort.signal)).rejects.toThrow();
+    expect(cancelling).toHaveBeenCalledTimes(1);
+  });
   it("bounds output, reaps cancellation, and distinguishes missing tools", async () => {
     await expect(
       desktopCommand(

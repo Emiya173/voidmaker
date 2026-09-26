@@ -109,6 +109,15 @@ export class DesktopController {
         await this.discard();
         this.error = "";
         this.nextCheckAt = this.now() + this.policy.intervalSeconds * 1000;
+        this.pauseReason =
+          observationPause(
+            this.policy,
+            this.grants,
+            this.now(),
+            new Date(this.now()).getHours(),
+            this.ports.present(),
+            this.ports.idle(),
+          ) || "等待下一次观察";
       })
       .catch(async (error) => {
         await this.discard();
@@ -183,6 +192,7 @@ export class DesktopController {
     this.check(source, signal);
     let text = "";
     let png: Buffer | undefined;
+    let windowProvider = "niri IPC · focused-window";
     if (source === "window") {
       const window = await this.ports.adapters.window(signal);
       this.check(source, signal);
@@ -193,6 +203,7 @@ export class DesktopController {
         return null;
       }
       text = window ? `应用：${window.app_id ?? "未知"}\n标题：${window.title ?? ""}` : "当前没有聚焦窗口";
+      if (window?.selection === "recent") windowProvider = "niri IPC · 最近聚焦窗口";
     } else if (source === "media") text = await this.ports.adapters.media(signal);
     else {
       png = await this.ports.adapters.region(signal);
@@ -215,7 +226,7 @@ export class DesktopController {
           id,
           source,
           provider: {
-            window: "niri IPC · focused-window",
+            window: windowProvider,
             media: "MPRIS · playerctl",
             region: "Wayland · slurp + grim",
           }[source],

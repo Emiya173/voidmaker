@@ -21,8 +21,7 @@ ShellRoot {
     function send(command) {
         if (transport.connected) {
             errorText = ""
-            transport.write(JSON.stringify(command) + "\n")
-            transport.flush()
+            transport.send(command)
         }
     }
     function setVoice(value) {
@@ -65,17 +64,15 @@ ShellRoot {
         case "error": errorText = event.message; break
         }
     }
-    Socket {
+    HostConnection {
         id: transport
         path: Quickshell.env("VOIDMAKER_SOCKET") || (Quickshell.env("XDG_RUNTIME_DIR") + "/voidmaker/host.sock")
-        connected: true
-        parser: SplitParser { onRead: line => root.receive(line) }
+        onMessage: line => root.receive(line)
         onConnectedChanged: {
             if (connected) { root.errorText = ""; root.send({ type: "hello", version: 4 }); if (workPanel.selectedId) root.send({type: "work_get", id: workPanel.selectedId}) }
             else { root.status = "offline"; root.approvalId = ""; root.voice = null; root.desktop = null }
         }
     }
-    Timer { interval: 2000; repeat: true; running: !transport.connected; onTriggered: transport.connected = true }
     IdleMonitor { id: activity; timeout: 300; enabled: !!root.desktop && root.desktop.policy.proactive
         onIsIdleChanged: root.send({type: "desktop_presence", idle: isIdle}) }
     ListModel { id: messages }

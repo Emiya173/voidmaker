@@ -104,7 +104,7 @@ ColumnLayout {
                     enabled: panel.online && editInput.text.trim().length > 0
                     onClicked: panel.command({type: "work_edit", id: panel.work.id, revision: panel.work.revision, prompt: editInput.text.trim()}) }
                 Button { text: "确认并执行"; visible: !!panel.work && panel.work.status === "draft"
-                    enabled: panel.online && editInput.text.trim() === panel.work.prompt
+                    enabled: panel.online && !!panel.work && editInput.text.trim() === panel.work.prompt
                     onClicked: panel.command({type: "work_submit", id: panel.work.id, revision: panel.work.revision}) }
                 Button { text: "重试（新执行）"; visible: !!panel.work && ["failed", "cancelled", "interrupted"].includes(panel.work.status)
                     enabled: panel.online

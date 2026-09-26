@@ -33,7 +33,7 @@ ScrollView {
             text: "授权后可读取并预览；点击发送才会附带给 Codex。截图每次手动框选，不读取剪贴板。撤销会停止相关回复，但无法撤回已经发送的数据。"
         }
         Repeater {
-            model: [{source: "window", name: "聚焦窗口"}, {source: "media", name: "媒体信息"}, {source: "region", name: "框选截图"}]
+            model: [{source: "window", name: "窗口（当前 / 最近聚焦）"}, {source: "media", name: "媒体信息"}, {source: "region", name: "框选截图"}]
             delegate: ColumnLayout {
                 required property var modelData
                 readonly property double expiry: panel.snapshot ? panel.snapshot.grants[modelData.source] : 0

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { z } from "zod";
+import { selectDesktopWindow } from "../../domain/src/desktop.js";
 
 export type DesktopCommand = (
   executable: string,
@@ -47,20 +48,39 @@ export const desktopCommand: DesktopCommand = (executable, args, signal, limit =
       else resolve(Buffer.concat(chunks));
     });
   });
-const windowSchema = z
-  .object({
-    id: z.number().int().nonnegative(),
-    app_id: z.string().max(512).nullable(),
-    title: z.string().max(8192).nullable(),
-  })
-  .nullable();
-export type FocusedWindow = z.infer<typeof windowSchema>;
+const windowSchema = z.object({
+  id: z.number().int().nonnegative(),
+  app_id: z.string().max(512).nullable(),
+  title: z.string().max(8192).nullable(),
+});
+const windowsSchema = z
+  .array(
+    windowSchema.extend({
+      is_focused: z.boolean(),
+      focus_timestamp: z.object({ secs: z.int().nonnegative(), nanos: z.int().min(0).max(999_999_999) }).nullable(),
+    }),
+  )
+  .max(512);
+export type FocusedWindow = (z.infer<typeof windowSchema> & { selection: "focused" | "recent" }) | null;
 export type DesktopAdapters = ReturnType<typeof desktopAdapters>;
 export function desktopAdapters(run: DesktopCommand = desktopCommand) {
   return {
     async window(signal: AbortSignal): Promise<FocusedWindow> {
       const raw = await run("niri", ["msg", "--json", "focused-window"], signal);
-      return windowSchema.parse(JSON.parse(raw.toString()));
+      const focused = windowSchema.nullable().parse(JSON.parse(raw.toString()));
+      if (focused) return { ...focused, selection: "focused" };
+      signal.throwIfAborted();
+      // Layer-shell surfaces can own keyboard focus. Select the compositor's last focused toplevel on demand.
+      const snapshot = await run("niri", ["msg", "--json", "windows"], signal, 1024 * 1024);
+      const selected = selectDesktopWindow(windowsSchema.parse(JSON.parse(snapshot.toString())));
+      return selected
+        ? {
+            id: selected.id,
+            app_id: selected.app_id,
+            title: selected.title,
+            selection: selected.is_focused ? "focused" : "recent",
+          }
+        : null;
     },
     async media(signal: AbortSignal): Promise<string> {
       // Listing first distinguishes no players from a broken session bus or missing executable.
