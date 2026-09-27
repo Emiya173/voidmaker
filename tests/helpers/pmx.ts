@@ -1,5 +1,5 @@
 // An original three-vertex PMX fixture, independent of downloaded character assets.
-export function trianglePmx(badIndex = false, restEyes = false) {
+export function trianglePmx(badIndex = false, restEyes = false, idle = false) {
   const chunks: Buffer[] = [];
   const byte = (...v: number[]) => {
     chunks.push(Buffer.from(v));
@@ -32,7 +32,7 @@ export function trianglePmx(badIndex = false, restEyes = false) {
     [1, 11, 0],
   ].entries()) {
     float(...pos, 0, 0, -1, 0, 0);
-    byte(0, 1);
+    byte(0, idle ? i + 5 : 1);
     float(i / 2);
   }
   uint(3);
@@ -48,12 +48,13 @@ export function trianglePmx(badIndex = false, restEyes = false) {
   byte(255, 255, 0, 0, 0);
   string("");
   uint(3);
-  uint(3);
-  for (const [i, name] of ["root", "左腕", "右腕"].entries()) {
+  const bones = ["root", "左腕", "右腕", ...(idle ? ["上半身", "首", "頭", "左目", "右目"] : [])];
+  uint(bones.length);
+  for (const [i, name] of bones.entries()) {
     string(name);
     string("");
     float(i === 1 ? 1 : i === 2 ? -1 : 0, i ? 10 : 0, 0);
-    byte(i ? 0 : 255);
+    byte(idle ? ([255, 3, 3, 0, 3, 4, 5, 5][i] ?? 255) : i ? 0 : 255);
     uint(0);
     byte(0, 0);
     float(0, 0, 0);

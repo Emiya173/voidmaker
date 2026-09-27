@@ -41,10 +41,18 @@ def main():
         )
         bpy.context.scene["voidmaker_source_sha256"] = fingerprint
 
+    # Authoring rigs may be saved in Pose/Edit Mode. Flush edits before making
+    # an isolated export copy; never evaluate the control rig or its drivers.
+    if bpy.context.object and bpy.context.object.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode="OBJECT")
     meshes = [obj for obj in bpy.context.scene.objects if obj.type == "MESH" and obj.get("voidmaker_export", True)]
-    if len(meshes) != 1:
+    snapshots = ("_PMX_ID", "_PMX_EDGE", "_VM_BASE_POSITION", "_VM_BASE_NORMAL")
+    authored = [obj for obj in meshes if any(name in obj.data.attributes for name in snapshots)]
+    candidates = authored if args.blend and authored else meshes
+    if len(candidates) != 1:
         raise RuntimeError("Expected one PMX mesh; keep topology and edit vertex groups")
-    obj = meshes[0]
+    obj = candidates[0]
+    ignored_meshes = [other.name for other in meshes if other != obj]
     mesh = obj.data
     if any(m.type != "ARMATURE" and (m.show_viewport or m.show_render) for m in obj.modifiers):
         raise RuntimeError("Unapplied geometry modifiers are not supported by this topology-preserving exchange")
@@ -73,7 +81,7 @@ def main():
         bpy.ops.object.select_all(action="DESELECT")
         obj.select_set(True)
         bpy.ops.wm.save_as_mainfile(filepath=str(output / "baseline.blend"))
-    for name in ("_PMX_ID", "_PMX_EDGE", "_VM_BASE_POSITION", "_VM_BASE_NORMAL"):
+    for name in snapshots:
         if name not in mesh.attributes:
             raise RuntimeError("Missing exchange snapshot; reimport the PMX: " + name)
 
@@ -145,6 +153,8 @@ def main():
         "adapterSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "binarySha256": hashlib.sha256((output / "blender.bin").read_bytes()).hexdigest(),
         "triangles": len(mesh.polygons), "morphs": names,
+        "sourceMesh": obj.name, "ignoredSceneMeshes": ignored_meshes,
+        "posePolicy": "raw mesh and morph data; strip armature modifiers on export copy; no animation or skin",
         "normalPolicy": "authored float normals on unchanged corners; Blender normals on edited neighborhoods",
         "preservedNormalCorners": preserved, "editedNormalCorners": len(data.loops) - preserved,
         "materialPolicy": "geometry-only; use original PMX toon/outline/texture sidecar",

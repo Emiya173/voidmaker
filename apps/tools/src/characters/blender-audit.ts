@@ -15,29 +15,33 @@ const triangle = (m: number, ids: readonly number[]) => {
  * Blender/glTF legitimately splits corners at UV seams and custom normal boundaries.
  */
 export function auditBlenderGeometry(source: PmxModel, geometry: BlenderGeometry) {
-  const metrics = { position: 0, normal: 0, uv: 0, outline: 0, morph: 0 };
-  const changed = { position: 0, normal: 0, uv: 0, outline: 0, morph: 0 };
+  const emptyMetrics = () => ({ position: 0, normal: 0, uv: 0, outline: 0, morph: 0 });
+  const metrics = emptyMetrics();
+  const changed = emptyMetrics();
+  const vertexErrors = geometry.vertices.map(emptyMetrics);
   const tolerances = { position: 0.00001, normal: 0.0005, uv: 0.000001, outline: 0.000001, morph: 0.00001 };
-  const record = (key: keyof typeof metrics, value: number) => {
+  const record = (i: number, key: keyof typeof metrics, value: number) => {
     metrics[key] = Math.max(metrics[key], value);
     if (value > tolerances[key]) changed[key]++;
+    const errors = vertexErrors[i];
+    if (errors) errors[key] = Math.max(errors[key], value);
   };
   let zeroNormals = 0;
   let rawNormalMaxError = 0,
     rawNormalOverTolerance = 0;
   const seen = new Set<number>();
-  for (const vertex of geometry.vertices) {
+  for (const [i, vertex] of geometry.vertices.entries()) {
     const original = source.vertices[vertex.id];
     if (!original) throw new Error("Blender 顶点 ID 越界");
     seen.add(vertex.id);
-    record("position", error(vertex.position, original.position));
+    record(i, "position", error(vertex.position, original.position));
     if (Math.hypot(...original.normal) < 1e-8) zeroNormals++;
-    record("normal", error(unit(vertex.normal), unit(original.normal)));
+    record(i, "normal", error(unit(vertex.normal), unit(original.normal)));
     const rawError = error(unit(vertex.rawNormal), unit(original.normal));
     rawNormalMaxError = Math.max(rawNormalMaxError, rawError);
     if (rawError > tolerances.normal) rawNormalOverTolerance++;
-    record("uv", error(vertex.uv, original.uv));
-    record("outline", Math.abs(vertex.edgeRatio - original.edgeRatio));
+    record(i, "uv", error(vertex.uv, original.uv));
+    record(i, "outline", Math.abs(vertex.edgeRatio - original.edgeRatio));
   }
   const faces = new Map<string, number>();
   let offset = 0;
@@ -72,7 +76,7 @@ export function auditBlenderGeometry(source: PmxModel, geometry: BlenderGeometry
     const before = new Map(original[0]?.elements.map((e) => [e.index, e.position ?? [0, 0, 0]]));
     const after = new Map(morph.elements.map((e) => [e.index, e.position]));
     geometry.vertices.forEach((vertex, i) => {
-      record("morph", error(after.get(i) ?? [0, 0, 0], before.get(vertex.id) ?? [0, 0, 0]));
+      record(i, "morph", error(after.get(i) ?? [0, 0, 0], before.get(vertex.id) ?? [0, 0, 0]));
     });
   }
   return {
@@ -88,6 +92,28 @@ export function auditBlenderGeometry(source: PmxModel, geometry: BlenderGeometry
     tolerances,
     restoredZeroNormalCorners: zeroNormals,
     rawBlenderNormals: { maxError: rawNormalMaxError, overTolerance: rawNormalOverTolerance },
+    // Count each exported vertex once per material, including the largest error
+    // across its morphs. Local edits must not silently alter unrelated regions.
+    byMaterial: geometry.parts.map((part) => {
+      const indices = new Set(part.indices);
+      const maxError = emptyMetrics(),
+        overTolerance = emptyMetrics();
+      for (const i of indices) {
+        const errors = vertexErrors[i];
+        if (!errors) throw new Error("Blender 顶点索引越界");
+        for (const key of Object.keys(errors) as (keyof typeof metrics)[]) {
+          maxError[key] = Math.max(maxError[key], errors[key]);
+          if (errors[key] > tolerances[key]) overTolerance[key]++;
+        }
+      }
+      return {
+        material: part.material,
+        name: source.materials[part.material]?.name,
+        vertices: indices.size,
+        maxError,
+        overTolerance,
+      };
+    }),
   };
 }
 
@@ -104,7 +130,7 @@ export function applyBlenderGeometry(source: PmxModel, geometry: BlenderGeometry
         position: v.position,
         normal: v.normal,
         uv: v.uv,
-        edgeRatio: original.edgeRatio,
+        edgeRatio: v.edgeRatio,
       };
     }),
     faces: parts.flatMap((p) =>

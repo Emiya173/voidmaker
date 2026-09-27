@@ -8,6 +8,7 @@ import { z } from "zod";
 import { type AvatarLook, avatarLook, avatarManifest } from "../../../../packages/contracts/src/character.js";
 import { applyBlenderGeometry, auditBlenderGeometry } from "./blender-audit.js";
 import { readBlenderGeometry } from "./blender-gltf.js";
+import { createIdleRig } from "./pmx-idle.js";
 import { createPose, type PmxPose } from "./pmx-pose.js";
 import { sculptVertex } from "./pmx-sculpt.js";
 
@@ -75,8 +76,8 @@ export const pmxSchema = z.object({
 });
 export type PmxModel = z.infer<typeof pmxSchema>;
 
-/** Desktop presentation conversion: geometry, toon materials, static pose and vertex expressions.
- * MMD physics, VMD motion, sphere maps and runtime skeletal animation are not exported.
+/** Desktop conversion with an optional compact runtime presentation rig.
+ * MMD physics, IK/grants, VMD motion and sphere maps are not exported.
  */
 export async function convertPmx(
   source: string,
@@ -153,12 +154,29 @@ async function convertPmxFiles(
   }
   const morphNames = [mouthName, blinkName, ...(look.restEyes ? [look.restEyes.morph] : [])];
   if (new Set(morphNames).size !== morphNames.length) throw new Error("表情映射不能重复");
-  const morphs = morphNames.map((name) => {
+  const findMorph = (name: string) => {
     const matches = pmx.morphs.filter((m) => m.name === name && m.type === 1);
     if (matches.length !== 1 || !matches[0]) throw new Error(`需要唯一顶点表情：${name}`);
     return matches[0];
-  });
+  };
+  const morphs = morphNames.map(findMorph);
+  const expressions = (["sleepy", "smile"] as const).filter((name) => look.expressions?.[name]);
+  for (const name of expressions) {
+    const combined = new Map<number, [number, number, number]>();
+    for (const [sourceName, weight] of Object.entries(look.expressions?.[name]?.morphs ?? {})) {
+      for (const element of findMorph(sourceName).elements) {
+        if (!element.position || element.index >= pmx.vertices.length) throw new Error("表情组合顶点无效");
+        const delta = combined.get(element.index) ?? [0, 0, 0];
+        element.position.forEach((value, axis) => {
+          delta[axis] = (delta[axis] ?? 0) + value * weight;
+        });
+        combined.set(element.index, delta);
+      }
+    }
+    morphs.push({ name, type: 1, elements: [...combined].map(([index, position]) => ({ index, position })) });
+  }
   const posed = createPose(pmx.vertices, pmx.bones, pose);
+  const idle = look.idleMotion ? createIdleRig(pmx.vertices, pmx.bones) : undefined;
   const owners = new Map<number, string>();
   let materialOffset = 0;
   for (const material of pmx.materials) {
@@ -187,18 +205,31 @@ async function convertPmxFiles(
   const bufferViews: object[] = [],
     accessors: object[] = [];
   let offset = 0;
-  const accessor = (values: number[], type: "SCALAR" | "VEC2" | "VEC3", indices = false, bounds = false) => {
+  const accessor = (
+    values: number[],
+    type: "SCALAR" | "VEC2" | "VEC3" | "VEC4" | "MAT4",
+    indices: boolean | "joints" = false,
+    bounds = false,
+  ) => {
     if (values.some((v) => !Number.isFinite(v))) throw new Error("模型数值无效");
-    const data = Buffer.alloc(values.length * 4);
+    const bytes = indices === "joints" ? 2 : 4;
+    // Every bufferView starts at a four-byte boundary, including ushort joints.
+    const padding = (4 - (offset % 4)) % 4;
+    if (padding) {
+      binary.push(Buffer.alloc(padding));
+      offset += padding;
+    }
+    const data = Buffer.alloc(values.length * bytes);
     values.forEach((v, i) => {
-      if (indices) data.writeUInt32LE(v, i * 4);
+      if (indices === "joints") data.writeUInt16LE(v, i * 2);
+      else if (indices) data.writeUInt32LE(v, i * 4);
       else data.writeFloatLE(v, i * 4);
     });
     const view = bufferViews.length;
     bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: data.length });
     offset += data.length;
     binary.push(data);
-    const size = type === "SCALAR" ? 1 : type === "VEC2" ? 2 : 3;
+    const size = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT4: 16 }[type];
     const min = Array(size).fill(Infinity) as number[],
       max = Array(size).fill(-Infinity) as number[];
     if (bounds)
@@ -208,7 +239,7 @@ async function convertPmxFiles(
       });
     accessors.push({
       bufferView: view,
-      componentType: indices ? 5125 : 5126,
+      componentType: indices === "joints" ? 5123 : indices ? 5125 : 5126,
       count: values.length / size,
       type,
       ...(bounds ? { min, max } : {}),
@@ -234,6 +265,25 @@ async function convertPmxFiles(
     sculpted.flatMap((v) => [v.edgeRatio, 0]),
     "VEC2",
   );
+  const skinAttributes = idle
+    ? {
+        JOINTS_0: accessor(
+          idle.skin.flatMap((v) => v.joints),
+          "VEC4",
+          "joints",
+        ),
+        WEIGHTS_0: accessor(
+          idle.skin.flatMap((v) => v.weights),
+          "VEC4",
+        ),
+      }
+    : {};
+  const inverseBindMatrices = idle ? accessor(idle.inverseBindMatrices, "MAT4") : undefined;
+  const poses = (["yawn", "think", "greet"] as const).filter((name) => look.poses?.[name]);
+  // Qt stores absolute target normals. Once any target has NORMAL, omitted
+  // channels can become zero normals rather than the unchanged base normal.
+  // Supply zero glTF deltas on every facial target in the mixed pose mesh.
+  const unchangedNormal = poses.length ? accessor(Array(pmx.vertices.length * 3).fill(0), "VEC3") : undefined;
   const targets = morphs.map((morph) => {
     const deltas = Array(pmx.vertices.length * 3).fill(0) as number[];
     for (const element of morph.elements) {
@@ -242,8 +292,48 @@ async function convertPmxFiles(
         deltas[element.index * 3 + axis] = v;
       });
     }
-    return { POSITION: accessor(deltas, "VEC3", false, true) };
-  });
+    return {
+      POSITION: accessor(deltas, "VEC3", false, true),
+      ...(unchangedNormal !== undefined ? { NORMAL: unchangedNormal } : {}),
+    };
+  }) as { POSITION: number; NORMAL?: number }[];
+  const poseHashes: { name: string; sha256: string }[] = [];
+  for (const name of poses) {
+    const base = await realpath(lookDirectory);
+    const path = await realpath(join(base, look.poses?.[name] ?? ""));
+    const local = relative(base, path);
+    if (local === ".." || local.startsWith("../") || isAbsolute(local) || (await stat(path)).size > 128 * 1024 * 1024)
+      throw new Error("作者姿势路径越界或过大");
+    const bytes = await readFile(path);
+    const data = z
+      .object({
+        sourceSha256: z.literal(sourceSha256),
+        positions: z.array(vec3).length(pmx.vertices.length),
+        normals: z.array(vec3).length(pmx.vertices.length),
+      })
+      .strict()
+      .parse(JSON.parse(bytes.toString("utf8")));
+    if (
+      data.normals.some((normal) => {
+        const length = Math.hypot(...normal);
+        return length > 0.00001 && Math.abs(length - 1) > 0.02;
+      })
+    )
+      throw new Error("作者姿势法线须归一化");
+    targets.push({
+      POSITION: accessor(
+        data.positions.flatMap((p, i) => p.map((v, axis) => v - (sculpted[i]?.position[axis] ?? 0))),
+        "VEC3",
+        false,
+        true,
+      ),
+      NORMAL: accessor(
+        data.normals.flatMap((p, i) => p.map((v, axis) => v - (sculpted[i]?.normal[axis] ?? 0))),
+        "VEC3",
+      ),
+    });
+    poseHashes.push({ name, sha256: createHash("sha256").update(bytes).digest("hex") });
+  }
   const images: { uri: string }[] = [],
     textures: { source: number }[] = [];
   const usedTextures = new Map<number, number>();
@@ -301,7 +391,7 @@ async function convertPmxFiles(
     const indices = faces.flatMap((f) => f.indices);
     if (indices.some((n) => n >= pmx.vertices.length)) throw new Error("三角形索引无效");
     return {
-      attributes: { POSITION: position, NORMAL: normal, TEXCOORD_0: uv, TEXCOORD_1: edge },
+      attributes: { POSITION: position, NORMAL: normal, TEXCOORD_0: uv, TEXCOORD_1: edge, ...skinAttributes },
       indices: accessor(indices, "SCALAR", true),
       material: i,
       targets,
@@ -326,13 +416,29 @@ async function convertPmxFiles(
     JSON.stringify({
       asset: { version: "2.0", generator: "VoidMaker PMX presentation converter" },
       scene: 0,
-      scenes: [{ nodes: primitives.map((_, i) => i) }],
-      nodes: primitives.map((_, i) => ({ mesh: i, name: `part_${i}` })),
+      scenes: [{ nodes: [...primitives.map((_, i) => i), ...(idle ? [primitives.length] : [])] }],
+      nodes: [
+        ...primitives.map((_, i) => ({ mesh: i, name: `part_${i}`, ...(idle ? { skin: 0 } : {}) })),
+        ...(idle
+          ? idle.nodes.map((node) => ({ ...node, children: node.children.map((i) => i + primitives.length) }))
+          : []),
+      ],
+      ...(idle
+        ? {
+            skins: [
+              {
+                joints: idle.nodes.map((_, i) => i + primitives.length),
+                inverseBindMatrices,
+                skeleton: primitives.length,
+              },
+            ],
+          }
+        : {}),
       meshes: primitives.map((primitive, i) => ({
         name: `part_${i}`,
         primitives: [primitive],
-        weights: morphs.map(() => 0),
-        extras: { targetNames: ["mouth", "blink", ...(look.restEyes ? ["restEyes"] : [])] },
+        weights: targets.map(() => 0),
+        extras: { targetNames: ["mouth", "blink", ...(look.restEyes ? ["restEyes"] : []), ...expressions, ...poses] },
       })),
       buffers: [{ uri: "avatar.bin", byteLength: offset }],
       bufferViews,
@@ -377,6 +483,9 @@ async function convertPmxFiles(
     centerX: ((bounds[0]?.[1] ?? 0) + (bounds[0]?.[0] ?? 0)) / 2,
     framing: { yaw: 0, zoom: 1, targetY: 0 },
     ...(look.restEyes ? { restEyes: look.restEyes.weight } : {}),
+    ...(idle ? { idleRig: idle.rig } : {}),
+    ...(expressions.length ? { expressions } : {}),
+    ...(poses.length ? { poses } : {}),
     parts: pmx.materials.map((material, i) => ({
       mesh: `qt/meshes/part_${i}_mesh.mesh`,
       color: material.diffuse.map((v) => Math.max(0, Math.min(1, v))),
@@ -399,6 +508,24 @@ async function convertPmxFiles(
   });
   for (const part of manifest.parts) {
     if ((await stat(join(output, part.mesh))).size < 32) throw new Error("转换网格缺失或无效");
+    if (idle) {
+      const mesh = await readFile(join(output, part.mesh));
+      if (!mesh.includes(Buffer.from("attr_joints")) || !mesh.includes(Buffer.from("attr_weights")))
+        throw new Error("Balsam 丢失待机蒙皮属性");
+    }
+  }
+  if (idle) {
+    const qml = await readFile(join(output, "qt", "Avatar.qml"), "utf8");
+    // Do not guess a per-material joint order if an importer changes it.
+    const lists = [...qml.matchAll(/joints:\s*\[([^\]]+)\]/g)];
+    if (
+      !lists.length ||
+      lists.some(
+        (m) =>
+          m[1]?.replace(/\s/g, "") !== "idle_joint_0,idle_joint_1,idle_joint_2,idle_joint_3,idle_joint_4,idle_joint_5",
+      )
+    )
+      throw new Error("Balsam 待机关节顺序与运行时不符");
   }
   await writeFile(join(output, "avatar.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   await writeFile(
@@ -411,11 +538,13 @@ async function convertPmxFiles(
         textures: textureHashes,
         pose,
         armRotationDegrees: pose === "relaxed" ? { 左腕: -38, 右腕: 38 } : {},
-        morphs: morphNames,
+        morphs: [...morphNames, ...expressions],
+        ...(poses.length ? { poses: poseHashes } : {}),
         look,
+        ...(idle ? { idleRig: { joints: 6, weights: "original PMX bone ancestor aggregation", bindPose: pose } } : {}),
         shading: "PMX diffuse + ambient, authored toon ramps, vertex-weighted inverted hull outlines",
         limitations: [
-          "static BDEF skinning (SDEF approximated)",
+          idle ? "six-joint runtime linear skinning (SDEF approximated)" : "static BDEF skinning (SDEF approximated)",
           "no IK, grant solver, VMD, physics or sphere maps",
           "shared toon textures use a procedural ramp",
         ],

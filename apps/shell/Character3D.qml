@@ -1,15 +1,74 @@
 import QtQuick
 import QtQuick3D
+import "CharacterMotion.js" as Motion
 
 View3D {
     id: scene
     property var avatar: ({height: 20, centerY: 10, parts: []})
     property real mouth: 0
     property bool online: true
+    // Supplied by the containing panel/window; proxy windows are not ordinary
+    // QQuickWindow parents, so Item.visible alone cannot report panel hiding.
+    property bool windowVisible: true
     property real blink: 0
-    property real breath: 0
+    property real sleepy: 0
+    property real smile: 0
+    property real yawn: 0
+    property real think: 0
+    property real greet: 0
+    readonly property real yawnWeight: (avatar.poses || []).indexOf("yawn") >= 0 ? Math.max(0, yawn) : 0
+    readonly property real thinkWeight: (avatar.poses || []).indexOf("think") >= 0 ? Math.max(0, think) : 0
+    readonly property real greetWeight: (avatar.poses || []).indexOf("greet") >= 0 ? Math.max(0, greet) : 0
+    readonly property real poseTotal: yawnWeight + thinkWeight + greetWeight
+    readonly property real poseScale: motionActive ? 1 / Math.max(1, poseTotal) : 0
+    readonly property real idleStrength: 1 - Math.min(1, poseTotal) * (motionActive ? 1 : 0)
+    readonly property real sleepyWeight: (avatar.expressions || []).indexOf("sleepy") >= 0 ? Math.max(0, sleepy) : 0
+    readonly property real smileWeight: (avatar.expressions || []).indexOf("smile") >= 0 ? Math.max(0, smile) : 0
+    readonly property real expressionTotal: sleepyWeight + smileWeight
+    readonly property real expressionScale: motionActive ? 1 / Math.max(1, expressionTotal) : 0
     // Developer inspection overrides; production defaults preserve normal behavior.
     property bool automaticMotion: true
+    // Manual deterministic sample used by the inspector; zero is the bind pose.
+    property real motionSeconds: 0
+    property real elapsedSeconds: 0
+    readonly property bool motionActive: scene.visible && scene.online && scene.windowVisible
+    readonly property var movement: Motion.sample(motionActive ? (automaticMotion ? elapsedSeconds : motionSeconds) : 0)
+    readonly property real effectiveBlink: motionActive ? (automaticMotion ? movement.blink : blink) : 0
+    readonly property bool rigged: !!avatar.idleRig
+    readonly property var pivots: rigged ? avatar.idleRig.pivots : [[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0]]
+    function jointPosition(index, parentIndex) {
+        const p = pivots[index], base = parentIndex < 0 ? [0, 0, 0] : pivots[parentIndex]
+        return Qt.vector3d(p[0] - base[0], p[1] - base[1], p[2] - base[2])
+    }
+    function inverseBind(p) {
+        return Qt.matrix4x4(1,0,0,-p[0], 0,1,0,-p[1], 0,0,1,-p[2], 0,0,0,1)
+    }
+    // Actual node transforms for headless lifecycle checks and inspection evidence.
+    function motionSnapshot() {
+        return {
+            seconds: elapsedSeconds,
+            windowVisible: windowVisible,
+            root: rootJoint.scenePosition.toString(),
+            chest: chestJoint.scenePosition.toString(),
+            head: headJoint.scenePosition.toString(),
+            eye: leftEyeJoint.scenePosition.toString(),
+            headRotation: headJoint.eulerRotation.toString(),
+            eyeRotation: leftEyeJoint.eulerRotation.toString(),
+            blink: effectiveBlink,
+            poseScale: poseScale,
+            idleStrength: idleStrength,
+            weights: parts.count ? parts.objectAt(0).faceTargets.map(target => target.weight) : []
+        }
+    }
+    function resetMotion() {
+        motionClock.stop()
+        elapsedSeconds = 0
+        if (motionActive && automaticMotion) motionClock.start()
+    }
+    onAvatarChanged: resetMotion()
+    onMotionActiveChanged: resetMotion()
+    onAutomaticMotionChanged: resetMotion()
+    Component.onCompleted: resetMotion()
     property bool outlinesEnabled: true
     property int diagnosticMode: 0
     property real viewYaw: framing.yaw
@@ -47,27 +106,99 @@ View3D {
         Node {
             scale: Qt.vector3d(scene.modelScale, scene.modelScale, scene.modelScale)
             x: -(scene.avatar.centerX || 0) * scene.modelScale
-            y: -scene.avatar.centerY * scene.modelScale + scene.breath
+            y: -scene.avatar.centerY * scene.modelScale
+            Node {
+                id: rootJoint
+                position: scene.jointPosition(0, -1)
+                Node {
+                    id: chestJoint
+                    position: scene.jointPosition(1, 0).plus(Qt.vector3d(0, scene.movement.breath * scene.avatar.height * 0.0014 * scene.idleStrength, 0))
+                    eulerRotation.x: scene.movement.chestPitch * scene.idleStrength
+                    Node {
+                        id: neckJoint
+                        position: scene.jointPosition(2, 1)
+                        eulerRotation.x: scene.movement.neckPitch * scene.idleStrength
+                        Node {
+                            id: headJoint
+                            position: scene.jointPosition(3, 2)
+                            eulerRotation: Qt.vector3d(scene.movement.headPitch, scene.movement.headYaw, scene.movement.headRoll).times(scene.idleStrength)
+                            Node {
+                                id: leftEyeJoint
+                                position: scene.jointPosition(4, 3)
+                                eulerRotation: Qt.vector3d(scene.movement.eyePitch, scene.movement.eyeYaw, 0).times(scene.idleStrength)
+                            }
+                            Node {
+                                id: rightEyeJoint
+                                position: scene.jointPosition(5, 3)
+                                eulerRotation: Qt.vector3d(scene.movement.eyePitch, scene.movement.eyeYaw, 0).times(scene.idleStrength)
+                            }
+                        }
+                    }
+                }
+            }
+            Skin {
+                id: idleSkin
+                joints: [rootJoint, chestJoint, neckJoint, headJoint, leftEyeJoint, rightEyeJoint]
+                inverseBindPoses: scene.pivots.map(p => scene.inverseBind(p))
+            }
             Repeater3D {
+                id: parts
                 model: scene.avatar.parts
                 delegate: Node {
                     id: part
                     required property var modelData
-                    readonly property var faceTargets: scene.avatar.restEyes === undefined
-                        ? [mouthTarget, blinkTarget] : [mouthTarget, blinkTarget, restEyesTarget]
-                    MorphTarget { id: mouthTarget; weight: scene.online ? scene.mouth : 0; attributes: MorphTarget.Position }
-                    MorphTarget { id: blinkTarget; weight: scene.online ? scene.blink : 0; attributes: MorphTarget.Position }
+                    readonly property int faceAttributes: scene.avatar.poses && scene.avatar.poses.length
+                        ? MorphTarget.Position | MorphTarget.Normal : MorphTarget.Position
+                    readonly property var faceTargets: {
+                        const targets = [mouthTarget, blinkTarget]
+                        if (scene.avatar.restEyes !== undefined) targets.push(restEyesTarget)
+                        for (const name of scene.avatar.expressions || [])
+                            targets.push(name === "sleepy" ? sleepyTarget : smileTarget)
+                        for (const name of scene.avatar.poses || [])
+                            targets.push(name === "yawn" ? yawnTarget : name === "think" ? thinkTarget : greetTarget)
+                        return targets
+                    }
+                    MorphTarget { id: mouthTarget; weight: scene.motionActive ? scene.mouth * scene.idleStrength : 0; attributes: part.faceAttributes }
+                    MorphTarget { id: blinkTarget; weight: scene.effectiveBlink * scene.idleStrength; attributes: part.faceAttributes }
                     // Neutral eyelids are an authored appearance, retained offline.
                     // Fade them out during the blink so the two shapes never over-close.
                     MorphTarget {
                         id: restEyesTarget
                         weight: (scene.avatar.restEyes || 0) * (1 - blinkTarget.weight)
-                        attributes: MorphTarget.Position
+                            * (1 - Math.min(1, scene.expressionTotal) * (scene.motionActive ? 1 : 0))
+                            * scene.idleStrength
+                        attributes: part.faceAttributes
+                    }
+                    MorphTarget {
+                        id: sleepyTarget
+                        weight: scene.sleepyWeight * scene.expressionScale * (1 - blinkTarget.weight) * scene.idleStrength
+                        attributes: part.faceAttributes
+                    }
+                    MorphTarget {
+                        id: smileTarget
+                        weight: scene.smileWeight * scene.expressionScale * (1 - blinkTarget.weight) * scene.idleStrength
+                        attributes: part.faceAttributes
+                    }
+                    MorphTarget {
+                        id: yawnTarget
+                        weight: scene.yawnWeight * scene.poseScale
+                        attributes: MorphTarget.Position | MorphTarget.Normal
+                    }
+                    MorphTarget {
+                        id: thinkTarget
+                        weight: scene.thinkWeight * scene.poseScale
+                        attributes: MorphTarget.Position | MorphTarget.Normal
+                    }
+                    MorphTarget {
+                        id: greetTarget
+                        weight: scene.greetWeight * scene.poseScale
+                        attributes: MorphTarget.Position | MorphTarget.Normal
                     }
                     Model {
                         source: modelData.meshUrl
                         materials: CharacterMaterial { part: part.modelData; diagnosticMode: scene.diagnosticMode }
                         morphTargets: part.faceTargets
+                        skin: scene.rigged ? idleSkin : null
                     }
                     Model {
                         visible: scene.outlinesEnabled && scene.diagnosticMode === 0 && !!modelData.toon && modelData.toon.edgeSize > 0 && modelData.color[3] >= 1 && modelData.toon.edgeColor[3] > 0
@@ -84,24 +215,15 @@ View3D {
                             fragmentShader: "shaders/character-outline.frag"
                         }
                         morphTargets: part.faceTargets
+                        skin: scene.rigged ? idleSkin : null
                     }
                 }
             }
         }
     }
-    SequentialAnimation on blink {
-        running: scene.visible && scene.online && scene.automaticMotion
-        loops: Animation.Infinite
-        PauseAnimation { duration: 4100 }
-        NumberAnimation { to: 1; duration: 90 }
-        NumberAnimation { to: 0; duration: 140 }
-        onStopped: if (scene.automaticMotion) scene.blink = 0
-    }
-    SequentialAnimation on breath {
-        running: scene.visible && scene.online && scene.automaticMotion
-        loops: Animation.Infinite
-        NumberAnimation { to: 0.06; duration: 1800; easing.type: Easing.InOutSine }
-        NumberAnimation { to: 0; duration: 1800; easing.type: Easing.InOutSine }
-        onStopped: if (scene.automaticMotion) scene.breath = 0
+    NumberAnimation {
+        id: motionClock
+        target: scene; property: "elapsedSeconds"
+        from: 0; to: 120; duration: 120000; loops: Animation.Infinite
     }
 }

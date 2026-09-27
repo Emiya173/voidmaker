@@ -6,6 +6,7 @@ Item {
     id: view
     required property var snapshot
     property bool online: true
+    property bool windowVisible: true
     readonly property var presentation: snapshot ? snapshot.presentation : null
     property var avatar: null
     onPresentationChanged: {
@@ -33,6 +34,7 @@ Item {
                 item.avatar = Qt.binding(() => view.avatar || ({height: 20, centerY: 10, parts: []}))
                 item.mouth = Qt.binding(() => view.mouth)
                 item.online = Qt.binding(() => view.online)
+                item.windowVisible = Qt.binding(() => view.windowVisible)
             }
         }
         Image {

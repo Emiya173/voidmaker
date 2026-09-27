@@ -198,7 +198,7 @@ export async function readBlenderGeometry(path: string): Promise<BlenderGeometry
         normal: vec3.parse(normals[i]),
         rawNormal: vec3.parse(rawNormals[i]),
         uv: z.tuple([z.number(), z.number()]).parse(uv[i]),
-        edgeRatio: edges[i]?.[0] ?? 0,
+        edgeRatio: z.number().min(0).max(100).parse(edges[i]?.[0]),
       });
     });
     const indices = accessor(p.indices, "SCALAR").map((v) => {

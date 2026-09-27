@@ -125,7 +125,7 @@ ShellRoot {
         exclusionMode: ExclusionMode.Ignore
         focusable: false
         mask: Region {}
-        CharacterView { anchors.fill: parent; snapshot: root.character; online: transport.connected }
+        CharacterView { anchors.fill: parent; snapshot: root.character; online: transport.connected; windowVisible: root.interfaceVisible }
     }
 
     PanelWindow {

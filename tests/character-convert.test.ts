@@ -156,3 +156,103 @@ it.skipIf(process.env.VOIDMAKER_PMX_SMOKE !== "1")(
   },
   30_000,
 );
+
+it.skipIf(process.env.VOIDMAKER_PMX_SMOKE !== "1")(
+  "preserves joint order, eight expression/pose slots and pose normals through real Balsam",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "voidmaker-pmx-idle-"));
+    try {
+      const source = join(root, "triangle.pmx");
+      const bytes = trianglePmx(false, true, true);
+      await writeFile(source, bytes);
+      const bmp = Buffer.alloc(58);
+      bmp.write("BM");
+      bmp.writeUInt32LE(58, 2);
+      bmp.writeUInt32LE(54, 10);
+      bmp.writeUInt32LE(40, 14);
+      bmp.writeInt32LE(1, 18);
+      bmp.writeInt32LE(1, 22);
+      bmp.writeUInt16LE(1, 26);
+      bmp.writeUInt16LE(24, 28);
+      bmp.fill(255, 54);
+      await writeFile(join(root, "toon.png"), bmp);
+      const pose = {
+        sourceSha256: createHash("sha256").update(bytes).digest("hex"),
+        positions: [
+          [1, 10, 0],
+          [2.2, 10.1, 0],
+          [1, 11.5, 0],
+        ],
+        normals: [
+          [0, 0, 1],
+          [0, 0, 1],
+          [0, 0, 1],
+        ],
+      };
+      await writeFile(join(root, "pose.json"), JSON.stringify(pose));
+      const look = avatarLook.parse({
+        idleMotion: true,
+        restEyes: { morph: "neutral eyes", weight: 0.3 },
+        expressions: { sleepy: { morphs: { まばたき: 0.24 } }, smile: { morphs: { あ: 0.1 } } },
+        poses: { yawn: "pose.json", think: "pose.json", greet: "pose.json" },
+      });
+      const output = join(root, "idle");
+      await convertPmx(source, output, "あ", "まばたき", "relaxed", look, root);
+      const manifest = avatarManifest.parse(JSON.parse(await readFile(join(output, "avatar.json"), "utf8")));
+      expect(manifest.idleRig?.pivots).toHaveLength(6);
+      expect(manifest.expressions).toEqual(["sleepy", "smile"]);
+      expect(manifest.poses).toEqual(["yawn", "think", "greet"]);
+      const qml = await readFile(join(output, "qt", "Avatar.qml"), "utf8");
+      for (const name of ["mouth", "blink", "restEyes", "sleepy", "smile", "yawn", "think", "greet"])
+        expect(qml).toContain(`objectName: "${name}"`);
+      const gltf = JSON.parse(await readFile(join(output, "avatar.gltf"), "utf8"));
+      expect(gltf.skins[0].joints).toHaveLength(6);
+      expect(gltf.meshes[0].primitives[0].targets).toHaveLength(8);
+      const data = await readFile(join(output, "avatar.bin"));
+      const read = (index: number) => {
+        const accessor = gltf.accessors[index],
+          view = gltf.bufferViews[accessor.bufferView];
+        return Array.from({ length: view.byteLength / 4 }, (_, i) => data.readFloatLE(view.byteOffset + i * 4));
+      };
+      const primitive = gltf.meshes[0].primitives[0];
+      for (const target of primitive.targets.slice(0, 5)) {
+        expect(target.NORMAL).toBeTypeOf("number");
+        expect(read(target.NORMAL)).toEqual(Array(9).fill(0));
+      }
+      const base = read(primitive.attributes.POSITION),
+        delta = read(primitive.targets[5].POSITION);
+      expect(primitive.targets[5].NORMAL).toBeTypeOf("number");
+      pose.positions.flat().forEach((expected, i) => {
+        expect((base[i] ?? 0) + (delta[i] ?? 0)).toBeCloseTo(expected, 5);
+      });
+      const weights = read(primitive.attributes.WEIGHTS_0);
+      expect(weights.filter((_, index) => index % 4 === 0)).toEqual([1, 1, 1]);
+      await writeFile(join(root, "pose.json"), JSON.stringify({ ...pose, sourceSha256: "0".repeat(64) }));
+      await expect(
+        convertPmx(source, join(root, "mismatch"), "あ", "まばたき", "original", look, root),
+      ).rejects.toThrow();
+      await writeFile(join(root, "pose.json"), JSON.stringify({ ...pose, positions: pose.positions.slice(1) }));
+      await expect(
+        convertPmx(source, join(root, "wrong-count"), "あ", "まばたき", "original", look, root),
+      ).rejects.toThrow();
+      await expect(
+        convertPmx(
+          source,
+          join(root, "missing-key"),
+          "あ",
+          "まばたき",
+          "original",
+          avatarLook.parse({ expressions: { smile: { morphs: { absent: 0.2 } } } }),
+        ),
+      ).rejects.toThrow("唯一顶点表情");
+      expect(
+        (await readdir(root)).filter(
+          (name) => name.startsWith(".pmx-") || ["mismatch", "wrong-count", "missing-key"].includes(name),
+        ),
+      ).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+  30_000,
+);

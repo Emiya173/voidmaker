@@ -20,6 +20,29 @@ const rgb = z.tuple([z.number().min(0).max(1), z.number().min(0).max(1), z.numbe
 const coordinate = z.number().min(-100000).max(100000);
 const point3 = z.tuple([coordinate, coordinate, coordinate]);
 const uvPoint = z.tuple([z.number().min(-8).max(8), z.number().min(-8).max(8)]);
+const expressionMix = z
+  .object({
+    morphs: z
+      .record(z.string().min(1).max(128), z.number().min(0).max(1))
+      .refine(
+        (values) => Object.keys(values).length > 0 && Object.keys(values).length <= 16,
+        "表情组合须含 1 至 16 个形态键",
+      ),
+  })
+  .strict();
+const expressionNames = z
+  .array(z.enum(["sleepy", "smile"]))
+  .max(2)
+  .refine((names) => new Set(names).size === names.length, "表情槽不能重复");
+const alphaFeather = z
+  .object({
+    center: uvPoint,
+    scale: z.tuple([z.number().finite().min(0.0001).max(64), z.number().finite().min(0.0001).max(64)]),
+    inner: z.number().finite().min(0).max(32),
+    outer: z.number().finite().positive().max(32),
+  })
+  .strict()
+  .refine((value) => value.outer > value.inner, "透明过渡外径须大于内径");
 export const avatarMaterialStyle = z
   .object({
     tint: rgb.default([1, 1, 1]),
@@ -30,6 +53,9 @@ export const avatarMaterialStyle = z
     specularStrength: z.number().min(0).max(2).default(1),
     outlineScale: z.number().min(0).max(2).default(1),
     outlineColor: rgb.optional(),
+    rampStrength: z.number().min(0).max(1).optional(),
+    shadeTint: rgb.optional(),
+    alphaFeather: alphaFeather.optional(),
   })
   .strict();
 export const avatarLook = z
@@ -91,6 +117,10 @@ export const avatarLook = z
       .object({ morph: z.string().min(1).max(128), weight: z.number().min(0).max(0.6) })
       .strict()
       .optional(),
+    // Opt-in six-joint presentation skinning, derived from original PMX weights.
+    idleMotion: z.boolean().optional(),
+    expressions: z.object({ sleepy: expressionMix.optional(), smile: expressionMix.optional() }).strict().optional(),
+    poses: z.object({ yawn: asset.optional(), think: asset.optional(), greet: asset.optional() }).strict().optional(),
   })
   .strict();
 export type AvatarLook = z.infer<typeof avatarLook>;
@@ -112,6 +142,14 @@ const framing = z
     targetY: z.number().min(-0.5).max(0.5).default(0),
   })
   .strict();
+export const avatarIdleRig = z
+  .object({
+    version: z.literal(1),
+    // root, chest, neck, head, left eye, right eye in the mesh bind coordinates.
+    pivots: z.array(point3).length(6),
+  })
+  .strict();
+export type AvatarIdleRig = z.infer<typeof avatarIdleRig>;
 export const avatarManifest = z
   .object({
     height: z.number().positive().max(100000),
@@ -122,6 +160,13 @@ export const avatarManifest = z
     framing: framing.default({ yaw: 0, zoom: 1, targetY: 0 }),
     // If present, mesh morph slot 2 contains a neutral eyelid adjustment.
     restEyes: z.number().min(0).max(0.6).optional(),
+    idleRig: avatarIdleRig.optional(),
+    expressions: expressionNames.optional(),
+    poses: z
+      .array(z.enum(["yawn", "think", "greet"]))
+      .max(3)
+      .refine((names) => new Set(names).size === names.length, "姿势槽不能重复")
+      .optional(),
     parts: z
       .array(
         z
@@ -148,6 +193,9 @@ export type AvatarPresentation = Readonly<{
   centerX?: number;
   framing?: Readonly<z.infer<typeof framing>>;
   restEyes?: number;
+  idleRig?: Readonly<AvatarIdleRig>;
+  expressions?: readonly ("sleepy" | "smile")[];
+  poses?: readonly ("yawn" | "think" | "greet")[];
   parts: readonly Readonly<{
     meshUrl: string;
     textureUrl: string;

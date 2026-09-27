@@ -18,6 +18,13 @@ void MAIN()
     vec4 texel = uHasMap ? texture(uMap, UV0) : vec4(1.0);
     float alpha = texel.a * uDiffuse.a;
     if (alpha < 0.1) discard;
+    if (uAlphaFeather) {
+        float radius = length((UV0 - uFeatherCenter) * uFeatherScale);
+        alpha *= 1.0 - smoothstep(uFeatherRange.x, uFeatherRange.y, radius);
+        // Apply the legacy texture cutout before feathering, so the smooth
+        // transition is not truncated at the texture's 0.1 alpha threshold.
+        if (alpha <= 0.0) discard;
+    }
     vec3 color = texel.rgb * uDiffuse.rgb;
     if (uToon) {
         vec3 normal = normalize(NORMAL + vec3(0.0, 0.0, 0.000001));
@@ -27,11 +34,15 @@ void MAIN()
             // Qt texture V runs from bottom to top; the authored light band is at the top.
             ? texture(uRamp, vec2(0.5, shade)).rgb
             : mix(vec3(0.76, 0.74, 0.78), vec3(1.0), smoothstep(0.42, 0.58, shade));
+        // Hand-painted atlases already carry their folds and strand shading.
+        // Attenuate the imported ramp per material instead of double-shading
+        // those lines as the head and cloth turn under the fixed key light.
+        ramp = mix(vec3(1.0), ramp, uRampStrength);
         color = texel.rgb * min(uDiffuse.rgb * 0.6 + uAmbient, vec3(1.0)) * ramp;
         // Low-frequency form shading complements the authored hard toon bands.
         // Per-material strength keeps faces gentle and gives cloth/hair more depth.
         float form = smoothstep(-0.15, 0.95, dot(normal, light));
-        color *= 1.0 - uShadeStrength * (1.0 - form);
+        color *= mix(vec3(1.0), uShadeTint * (1.0 - uShadeStrength), 1.0 - form);
         vec3 halfVector = normalize(light + VIEW_VECTOR);
         color += uSpecular * uSpecularStrength * 0.6 * pow(max(dot(normal, halfVector), 0.0), max(uShininess, 1.0));
     }

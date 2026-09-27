@@ -160,6 +160,9 @@ export async function loadCharacters(
             centerX: manifest.centerX,
             framing: manifest.framing,
             ...(manifest.restEyes === undefined ? {} : { restEyes: manifest.restEyes }),
+            ...(manifest.idleRig ? { idleRig: manifest.idleRig } : {}),
+            ...(manifest.expressions ? { expressions: manifest.expressions } : {}),
+            ...(manifest.poses ? { poses: manifest.poses } : {}),
             parts,
           };
         } catch {
