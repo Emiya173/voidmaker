@@ -1,84 +1,12 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { convertPmx } from "../apps/tools/src/characters/pmx.js";
-import { avatarManifest } from "../packages/contracts/src/character.js";
+import { avatarLook, avatarManifest } from "../packages/contracts/src/character.js";
 
-// An original three-vertex PMX fixture, independent of downloaded character assets.
-function trianglePmx(badIndex = false) {
-  const chunks: Buffer[] = [];
-  const byte = (...v: number[]) => {
-    chunks.push(Buffer.from(v));
-  };
-  const uint = (v: number) => {
-    const b = Buffer.alloc(4);
-    b.writeUInt32LE(v);
-    chunks.push(b);
-  };
-  const float = (...v: number[]) => {
-    for (const n of v) {
-      const b = Buffer.alloc(4);
-      b.writeFloatLE(n);
-      chunks.push(b);
-    }
-  };
-  const string = (v: string) => {
-    const b = Buffer.from(v, "utf16le");
-    uint(b.length);
-    chunks.push(b);
-  };
-  chunks.push(Buffer.from("PMX "));
-  float(2);
-  byte(8, 0, 0, 1, 1, 1, 1, 1, 1);
-  for (const text of ["Triangle", "", "Original regression fixture", ""]) string(text);
-  uint(3);
-  for (const [i, pos] of [
-    [1, 10, 0],
-    [2, 10, 0],
-    [1, 11, 0],
-  ].entries()) {
-    float(...pos, 0, 0, -1, 0, 0);
-    byte(0, 1);
-    float(i / 2);
-  }
-  uint(3);
-  byte(0, 1, badIndex ? 99 : 2);
-  uint(1);
-  string("toon.png");
-  uint(1);
-  string("surface");
-  string("");
-  float(1, 1, 1, 1, 0, 0, 0, 50, 0.5, 0.5, 0.5);
-  byte(16);
-  float(0.1, 0.1, 0.1, 1, 1);
-  byte(255, 255, 0, 0, 0);
-  string("");
-  uint(3);
-  uint(3);
-  for (const [i, name] of ["root", "左腕", "右腕"].entries()) {
-    string(name);
-    string("");
-    float(i === 1 ? 1 : i === 2 ? -1 : 0, i ? 10 : 0, 0);
-    byte(i ? 0 : 255);
-    uint(0);
-    byte(0, 0);
-    float(0, 0, 0);
-  }
-  uint(2);
-  for (const name of ["あ", "まばたき"]) {
-    string(name);
-    string("");
-    byte(1, 1);
-    uint(1);
-    byte(0);
-    float(0, 0.1, 0);
-  }
-  uint(0);
-  uint(0);
-  uint(0);
-  return Buffer.concat(chunks);
-}
+import { trianglePmx } from "./helpers/pmx.js";
 
 it.skipIf(process.env.VOIDMAKER_PMX_SMOKE !== "1")(
   "converts original PMX geometry, edge weights, toon ramp and morphs with real Balsam",
@@ -110,10 +38,111 @@ it.skipIf(process.env.VOIDMAKER_PMX_SMOKE !== "1")(
       expect(qml).toContain('objectName: "mouth"');
       expect(qml).toContain('objectName: "blink"');
       expect(JSON.parse(await readFile(join(output, "conversion.json"), "utf8"))).toMatchObject({
-        version: 2,
+        version: 4,
         pose: "relaxed",
         sourceSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       });
+      await writeFile(source, trianglePmx(false, true));
+      const look = avatarLook.parse({
+        materials: { surface: { tint: [0.9, 0.8, 0.7], outlineScale: 0.7 } },
+        restEyes: { morph: "neutral eyes", weight: 0.2 },
+      });
+      const styled = join(root, "styled");
+      await convertPmx(source, styled, "あ", "まばたき", "relaxed", look);
+      const styledManifest = avatarManifest.parse(JSON.parse(await readFile(join(styled, "avatar.json"), "utf8")));
+      expect(styledManifest.restEyes).toBe(0.2);
+      expect(styledManifest.parts[0]?.style).toMatchObject({ tint: [0.9, 0.8, 0.7], outlineScale: 0.7, contrast: 1 });
+      expect(await readFile(join(styled, "qt", "Avatar.qml"), "utf8")).toContain('objectName: "restEyes"');
+      const lookRoot = join(root, "look");
+      await mkdir(lookRoot);
+      const replacement = Buffer.from(bmp);
+      replacement[54] = 80;
+      await writeFile(join(lookRoot, "ink.png"), replacement);
+      const refined = join(root, "refined");
+      await convertPmx(
+        source,
+        refined,
+        "あ",
+        "まばたき",
+        "original",
+        avatarLook.parse({
+          sourceSha256: createHash("sha256")
+            .update(await readFile(source))
+            .digest("hex"),
+          textures: { "toon.png": "ink.png" },
+          geometry: { surface: { transform: { pivot: [0, 0, 0], rotation: [0, 0, 0], translation: [0, 0.5, 0] } } },
+        }),
+        lookRoot,
+      );
+      const provenance = JSON.parse(await readFile(join(refined, "conversion.json"), "utf8"));
+      expect(provenance.textures[0].replacement.sha256).toBe(createHash("sha256").update(replacement).digest("hex"));
+      expect(avatarManifest.parse(JSON.parse(await readFile(join(refined, "avatar.json"), "utf8"))).centerY).toBe(11);
+      await expect(
+        convertPmx(
+          source,
+          join(root, "wrong-model"),
+          "あ",
+          "まばたき",
+          "original",
+          avatarLook.parse({ sourceSha256: "0".repeat(64) }),
+        ),
+      ).rejects.toThrow("指纹不符");
+      await expect(
+        convertPmx(
+          source,
+          join(root, "wrong-texture"),
+          "あ",
+          "まばたき",
+          "original",
+          avatarLook.parse({ textures: { "absent.png": "ink.png" } }),
+          lookRoot,
+        ),
+      ).rejects.toThrow("未匹配");
+      await symlink(join(root, "toon.png"), join(lookRoot, "escape.png"));
+      await expect(
+        convertPmx(
+          source,
+          join(root, "outside-texture"),
+          "あ",
+          "まばたき",
+          "original",
+          avatarLook.parse({ textures: { "toon.png": "escape.png" } }),
+          lookRoot,
+        ),
+      ).rejects.toThrow("越界");
+      expect(
+        (await readdir(root)).filter((name) => ["wrong-model", "wrong-texture", "outside-texture"].includes(name)),
+      ).toEqual([]);
+      await expect(
+        convertPmx(
+          source,
+          join(root, "bad-look"),
+          "あ",
+          "まばたき",
+          "relaxed",
+          avatarLook.parse({ materials: { absent: {} } }),
+        ),
+      ).rejects.toThrow("唯一材质");
+      await expect(
+        convertPmx(
+          source,
+          join(root, "bad-eyes"),
+          "あ",
+          "まばたき",
+          "relaxed",
+          avatarLook.parse({ restEyes: { morph: "absent", weight: 0.2 } }),
+        ),
+      ).rejects.toThrow("唯一顶点表情");
+      await expect(
+        convertPmx(
+          source,
+          join(root, "repeated-eyes"),
+          "あ",
+          "まばたき",
+          "relaxed",
+          avatarLook.parse({ restEyes: { morph: "まばたき", weight: 0.2 } }),
+        ),
+      ).rejects.toThrow("不能重复");
       await writeFile(source, trianglePmx(true));
       await expect(convertPmx(source, join(root, "invalid"))).rejects.toThrow("三角形索引");
       expect(await readdir(root)).not.toContain("invalid");

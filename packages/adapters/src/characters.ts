@@ -135,6 +135,7 @@ export async function loadCharacters(
                 textureUrl: part.texture ? await portrait(dirname(manifestPath), part.texture) : "",
                 color: part.color,
                 doubleSided: part.doubleSided,
+                ...(part.style ? { style: part.style } : {}),
                 ...(part.toon
                   ? {
                       toon: {
@@ -158,6 +159,7 @@ export async function loadCharacters(
             ...(manifest.depth === undefined ? {} : { depth: manifest.depth }),
             centerX: manifest.centerX,
             framing: manifest.framing,
+            ...(manifest.restEyes === undefined ? {} : { restEyes: manifest.restEyes }),
             parts,
           };
         } catch {

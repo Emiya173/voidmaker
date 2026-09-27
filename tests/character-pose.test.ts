@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { createPose } from "../apps/tools/src/characters/pmx-pose.js";
-import { avatarManifest } from "../packages/contracts/src/character.js";
+import { avatarLook, avatarManifest } from "../packages/contracts/src/character.js";
 
 const bones = [
   { name: "root", parentIndex: -1, position: [0, 0, 0] as const },
@@ -79,4 +79,18 @@ it("validates toon assets and bounded framing while accepting previous avatar ma
       ],
     }).success,
   ).toBe(false);
+});
+it("keeps material grading neutral by default and validates authored eye/ink adjustments", () => {
+  expect(avatarLook.parse({ materials: { cloth: {} } }).materials.cloth).toEqual({
+    tint: [1, 1, 1],
+    saturation: 1,
+    contrast: 1,
+    shadeStrength: 0,
+    textureStrength: 0,
+    specularStrength: 1,
+    outlineScale: 1,
+  });
+  expect(avatarLook.safeParse({ restEyes: { morph: "eyes", weight: 1.2 } }).success).toBe(false);
+  expect(avatarLook.safeParse({ materials: { cloth: { tint: [3, 0, 0] } } }).success).toBe(false);
+  expect(avatarLook.safeParse({ materials: { cloth: { fragmentShader: "arbitrary.frag" } } }).success).toBe(false);
 });

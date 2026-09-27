@@ -17,6 +17,83 @@ const color = z.tuple([
   z.number().min(0).max(1),
 ]);
 const rgb = z.tuple([z.number().min(0).max(1), z.number().min(0).max(1), z.number().min(0).max(1)]);
+const coordinate = z.number().min(-100000).max(100000);
+const point3 = z.tuple([coordinate, coordinate, coordinate]);
+const uvPoint = z.tuple([z.number().min(-8).max(8), z.number().min(-8).max(8)]);
+export const avatarMaterialStyle = z
+  .object({
+    tint: rgb.default([1, 1, 1]),
+    saturation: z.number().min(0).max(2).default(1),
+    contrast: z.number().min(0.5).max(1.5).default(1),
+    shadeStrength: z.number().min(0).max(0.5).default(0),
+    textureStrength: z.number().min(0).max(0.1).default(0),
+    specularStrength: z.number().min(0).max(2).default(1),
+    outlineScale: z.number().min(0).max(2).default(1),
+    outlineColor: rgb.optional(),
+  })
+  .strict();
+export const avatarLook = z
+  .object({
+    materials: z.record(z.string().min(1).max(128), avatarMaterialStyle).default({}),
+    sourceSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+    // Offline conversion only; paths are relative to the look file, never runtime URLs.
+    textures: z.record(asset, asset).optional(),
+    geometry: z
+      .record(
+        z.string().min(1).max(128),
+        z
+          .object({
+            transform: z
+              .object({
+                pivot: point3,
+                rotation: z.tuple([
+                  z.number().min(-180).max(180),
+                  z.number().min(-180).max(180),
+                  z.number().min(-180).max(180),
+                ]),
+                translation: point3,
+                scale: z.number().min(0.5).max(2).default(1),
+              })
+              .strict()
+              .optional(),
+            brushes: z
+              .array(
+                z
+                  .object({
+                    center: point3,
+                    radius: z.tuple([
+                      z.number().min(0.0001).max(100000),
+                      z.number().min(0.0001).max(100000),
+                      z.number().min(0.0001).max(100000),
+                    ]),
+                    offset: point3,
+                    edgeScale: z.number().min(0).max(2).default(1),
+                    // Fraction of the ellipsoid radius with full brush influence.
+                    inner: z.number().min(0).max(0.95).default(0),
+                    uvRegion: z
+                      .object({ min: uvPoint, max: uvPoint })
+                      .strict()
+                      .refine((region) => region.max.every((n, i) => n >= (region.min[i] ?? 0)), "UV 选择范围无效")
+                      .optional(),
+                  })
+                  .strict(),
+              )
+              .max(64)
+              .default([]),
+          })
+          .strict(),
+      )
+      .optional(),
+    restEyes: z
+      .object({ morph: z.string().min(1).max(128), weight: z.number().min(0).max(0.6) })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type AvatarLook = z.infer<typeof avatarLook>;
 const toon = z
   .object({
     ambient: rgb,
@@ -43,6 +120,8 @@ export const avatarManifest = z
     depth: z.number().positive().max(100000).optional(),
     centerX: z.number().min(-100000).max(100000).default(0),
     framing: framing.default({ yaw: 0, zoom: 1, targetY: 0 }),
+    // If present, mesh morph slot 2 contains a neutral eyelid adjustment.
+    restEyes: z.number().min(0).max(0.6).optional(),
     parts: z
       .array(
         z
@@ -52,6 +131,7 @@ export const avatarManifest = z
             color,
             doubleSided: z.boolean().default(false),
             toon: toon.optional(),
+            style: avatarMaterialStyle.optional(),
           })
           .strict(),
       )
@@ -67,12 +147,14 @@ export type AvatarPresentation = Readonly<{
   depth?: number;
   centerX?: number;
   framing?: Readonly<z.infer<typeof framing>>;
+  restEyes?: number;
   parts: readonly Readonly<{
     meshUrl: string;
     textureUrl: string;
     color: readonly number[];
     doubleSided: boolean;
     toon?: Readonly<Omit<z.infer<typeof toon>, "ramp"> & { rampUrl: string }>;
+    style?: Readonly<z.infer<typeof avatarMaterialStyle>>;
   }>[];
 }>;
 export const characterDefinition = z

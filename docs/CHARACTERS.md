@@ -1,6 +1,7 @@
 # 角色与桌宠视图
 
 后续功能与验收清单见 [角色后续待办](CHARACTER_TODO.md)。
+Blender 几何编辑、零修改往返与正式 Qt 检查台见 [角色修模流程](CHARACTER_EDITING.md)。
 
 ## 使用
 
@@ -138,8 +139,58 @@ SDEF 采用 BDEF2 权重近似，不求解 IK、附加旋转或物理；这不�
 例如 `zoom: 2, targetY: 0.26` 可用于上半身特写；放大可能裁切手脚。修改后重启 Host。
 保持 `character.json` 的素材入口不变，仅替换 avatar 内容时，不改变角色人设版本/聊天历史映射。
 
-运行时只读取数据与素材，不执行 Balsam 生成的 QML。每个网格固定两个顶点 morph：
+运行时只读取数据与素材，不执行 Balsam 生成的 QML。每个网格前两个顶点 morph：
 第 0 个口型「あ」、第 1 个眨眼「まばたき」。其他模型需具备这两个日文命名的顶点表情，或在转换接口中指定名称。
+可使用 `--look /path/to/look.json` 加入按原 PMX 材质名配置的外观和可选常态眼睑，例如：
+
+```json
+{
+  "materials": {
+    "模型中的衣服材质名": {
+      "tint": [0.9, 0.95, 0.98],
+      "saturation": 0.9,
+      "contrast": 1.02,
+      "shadeStrength": 0.15,
+      "textureStrength": 0.03,
+      "specularStrength": 0.2,
+      "outlineScale": 0.8,
+      "outlineColor": [0.1, 0.1, 0.12]
+    }
+  },
+  "restEyes": {"morph": "模型中的眼睑表情名", "weight": 0.2}
+}
+```
+
+这些字段全部可选；默认不调色、不增加柔和明暗或表面纹理，并保留原描边与高光。
+`tint` 为 RGB 乘色；`shadeStrength` 增加形体明暗，`textureStrength` 增加固定在 UV 上的微量哑光纹理，
+纹理小于像素时自动淡出。不同材质可独立控制，避免一套参数同时压暗脸部与衣服。
+材质名必须唯一匹配，否则拒绝转换；配置只能包含受限数据，不能加载任意着色器。
+具体角色的外观配置、参考图和转换结果存放在本地、排除在 Git 外。
+
+`--look` 还支持离线网格细化与替换纹理。以下字段只在转换时使用，不增加运行时 QML 状态：
+
+- `sourceSha256`：可选的原 PMX SHA-256 锁定；角色专用网格调整建议始终填写，指纹不符即拒绝。
+- `textures`：原 PMX 中的纹理相对路径到新纹理相对路径的映射，例如
+  `{"tex/uv_02.png": "uv-02-refined.png"}`。新文件相对于 **look.json 所在目录**，不得通过符号链接越界；
+  原纹理必须存在，未匹配的映射会报错。应维持原 UV 布局，不能直接把立绘当作模型贴图。
+- `geometry`：以唯一材质名选择网格；在站姿烘焙后的 PMX 右手坐标中操作，单位与原模型一致。
+  `transform` 包含 `pivot`、按 X/Y/Z 顺序的角度 `rotation`、`translation` 和可选均匀 `scale`（默认 1）。
+  `brushes` 为局部椭球调整列表，每项包含 `center`、三个正数 `radius`、位移 `offset`；
+  `inner` 指定全影响区域占半径比例（默认 0），外侧使用平滑衰减。各笔刷在原坐标计算后相加，再执行整体变换。
+  可选 `uvRegion: {min: [u, v], max: [u, v]}` 限定 UV 岛，`edgeScale` 调整局部描边（默认 1）。
+  UV 区域应覆盖完整的目标发束/部件，避免把位置选择边界切在连续表面中央。
+
+局部形变同步处理法线与表情终点，检测顶点处的局部翻转/塌陷，并拒绝跨材质共享顶点的修改。
+这些校验不代替多视角自相交检查；发饰必须同时核对正面和侧面的贴合，不能只为正面可见而前移。
+第三轮头顶程序形变已被用户指出畸变并撤回；后续造型编辑转入 Blender，先做零修改往返，再按发束修改。
+完全关闭描边的顶点不绘制重合外壳，避免深度冲突产生斑点。
+
+`restEyes` 可省略；配置时须唯一匹配一个独立顶点表情，转换器将其写入第 2 号 morph。
+它用于常态眼睑微调，权重限 0–0.6，运行时权重为 `restEyes × (1 − blink)`，闭眼时不叠加变形。
+断连时嘴和眨眼复位，常态眼睑保留。它不是对话情绪推断，也不扩展 Host 业务状态。
+转换格式版本 4 的 `conversion.json` 保存完整外观/网格参数、全部表情名称及原/替换纹理 SHA-256，以便复现。
+完成转换后也可编辑 `avatar.json` 中各部分的 `style` 和已存在的 `restEyes` 权重，再重启 Host；
+不要给只有两个 morph 的旧网格手动添加 `restEyes`，需要通过转换器生成第三个表情。
 支持原始/烘焙站姿、口型、自动眨眼、轻微整体起伏；没有导出运行时骨骼、VMD、刚体、布料物理或球面贴图。
 共用 Toon 贴图目前使用程序色阶近似，七海使用的五张专用色阶则全部保留。
 不能将本功能等同完整 MMD 播放器或 VRM 导入器。Live2D 渲染器尚未实现，可后续扩展 `avatar.kind`。
@@ -155,7 +206,8 @@ Flake 已提供 Qt QML/插件路径。系统全局 Quickshell 可能使用另一
 
 转换器专项回归可在 Nix 环境运行 `VOIDMAKER_PMX_SMOKE=1 pnpm test tests/character-convert.test.ts`。
 它动态生成自制三角形 PMX/BMP，实际执行 ffmpeg/Balsam，检查第二组 UV 描边数据、两个 morph、来源记录，
-以及坏索引/缺阴影贴图的失败清理；不依赖下载角色素材。
+以及坏索引、缺阴影贴图、源指纹不符、替换纹理未匹配/越界的失败清理；不依赖下载角色素材。
+`tests/character-sculpt.test.ts` 另覆盖局部影响范围、法线方向、表情终点、发饰旋转和翻转拒绝。
 
 七海千秋服务模板见 [voidmaker-tts-chiaki.service](systemd/voidmaker-tts-chiaki.service)，
 `~/.config/voidmaker/tts-chiaki.yaml` 的 `custom` 配置须设为 `version: v2ProPlus`，

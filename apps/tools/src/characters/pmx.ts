@@ -5,12 +5,15 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { Parser } from "mmd-parser";
 import { z } from "zod";
-import { avatarManifest } from "../../../../packages/contracts/src/character.js";
+import { type AvatarLook, avatarLook, avatarManifest } from "../../../../packages/contracts/src/character.js";
+import { applyBlenderGeometry, auditBlenderGeometry } from "./blender-audit.js";
+import { readBlenderGeometry } from "./blender-gltf.js";
 import { createPose, type PmxPose } from "./pmx-pose.js";
+import { sculptVertex } from "./pmx-sculpt.js";
 
 const run = promisify(execFile);
 const vec3 = z.tuple([z.number(), z.number(), z.number()]);
-const pmxSchema = z.object({
+export const pmxSchema = z.object({
   vertices: z
     .array(
       z.object({
@@ -70,6 +73,7 @@ const pmxSchema = z.object({
     )
     .max(256),
 });
+export type PmxModel = z.infer<typeof pmxSchema>;
 
 /** Desktop presentation conversion: geometry, toon materials, static pose and vertex expressions.
  * MMD physics, VMD motion, sphere maps and runtime skeletal animation are not exported.
@@ -80,6 +84,9 @@ export async function convertPmx(
   mouthName = "あ",
   blinkName = "まばたき",
   pose: PmxPose = "original",
+  look: AvatarLook = { materials: {} },
+  lookDirectory = dirname(source),
+  blenderGltf?: string,
 ) {
   const target = resolve(output);
   await mkdir(dirname(target), { recursive: true });
@@ -87,7 +94,16 @@ export async function convertPmx(
   let staging: string | undefined;
   try {
     staging = await mkdtemp(join(dirname(target), ".pmx-"));
-    const result = await convertPmxFiles(source, staging, mouthName, blinkName, pose);
+    const result = await convertPmxFiles(
+      source,
+      staging,
+      mouthName,
+      blinkName,
+      pose,
+      avatarLook.parse(look),
+      lookDirectory,
+      blenderGltf,
+    );
     await rename(staging, target);
     return { ...result, manifest: join(target, "avatar.json") };
   } catch (error) {
@@ -97,18 +113,75 @@ export async function convertPmx(
   }
 }
 
-async function convertPmxFiles(source: string, output: string, mouthName: string, blinkName: string, pose: PmxPose) {
+async function convertPmxFiles(
+  source: string,
+  output: string,
+  mouthName: string,
+  blinkName: string,
+  pose: PmxPose,
+  look: AvatarLook,
+  lookDirectory: string,
+  blenderGltf?: string,
+) {
   if ((await stat(source)).size > 64 * 1024 * 1024) throw new Error("PMX 文件过大");
   const bytes = await readFile(source);
-  const pmx = pmxSchema.parse(
+  const sourceSha256 = createHash("sha256").update(bytes).digest("hex");
+  if (look.sourceSha256 && look.sourceSha256 !== sourceSha256) throw new Error("外观配置与源模型指纹不符");
+  let pmx = pmxSchema.parse(
     new Parser().parsePmx(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), true),
   );
-  const morphs = [mouthName, blinkName].map((name) => {
-    const morph = pmx.morphs.find((m) => m.name === name && m.type === 1);
-    if (!morph) throw new Error(`缺少顶点表情：${name}`);
-    return morph;
+  let exchange: object | undefined;
+  if (blenderGltf) {
+    const toolchainPath = join(dirname(blenderGltf), "blender-toolchain.json");
+    if ((await stat(toolchainPath)).size > 64 * 1024) throw new Error("Blender 来源记录过大");
+    const toolchain = z
+      .object({ sourceSha256: z.literal(sourceSha256), blender: z.string(), mmdTools: z.string() })
+      .parse(JSON.parse(await readFile(toolchainPath, "utf8")));
+    const geometry = await readBlenderGeometry(blenderGltf);
+    const audit = auditBlenderGeometry(pmx, geometry);
+    pmx = applyBlenderGeometry(pmx, geometry);
+    exchange = {
+      ...toolchain,
+      audit,
+      gltfSha256: createHash("sha256")
+        .update(await readFile(blenderGltf))
+        .digest("hex"),
+    };
+  }
+  for (const name of [...Object.keys(look.materials), ...Object.keys(look.geometry ?? {})]) {
+    if (pmx.materials.filter((m) => m.name === name).length !== 1) throw new Error(`外观配置需要唯一材质：${name}`);
+  }
+  const morphNames = [mouthName, blinkName, ...(look.restEyes ? [look.restEyes.morph] : [])];
+  if (new Set(morphNames).size !== morphNames.length) throw new Error("表情映射不能重复");
+  const morphs = morphNames.map((name) => {
+    const matches = pmx.morphs.filter((m) => m.name === name && m.type === 1);
+    if (matches.length !== 1 || !matches[0]) throw new Error(`需要唯一顶点表情：${name}`);
+    return matches[0];
   });
   const posed = createPose(pmx.vertices, pmx.bones, pose);
+  const owners = new Map<number, string>();
+  let materialOffset = 0;
+  for (const material of pmx.materials) {
+    for (const face of pmx.faces.slice(materialOffset, materialOffset + material.faceCount)) {
+      for (const index of face.indices) {
+        if (index >= pmx.vertices.length) throw new Error("三角形索引无效");
+        const previous = owners.get(index);
+        if (previous && previous !== material.name && (look.geometry?.[previous] || look.geometry?.[material.name]))
+          throw new Error("局部形变不能跨共享顶点材质");
+        owners.set(index, material.name);
+      }
+    }
+    materialOffset += material.faceCount;
+  }
+  if (materialOffset !== pmx.faces.length) throw new Error("材质面数不匹配");
+  const sculpted = posed.vertices.map((vertex, i) => {
+    const original = pmx.vertices[i];
+    if (!original) throw new Error("形变顶点索引无效");
+    return sculptVertex(
+      { ...vertex, edgeRatio: original.edgeRatio, uv: original.uv },
+      look.geometry?.[owners.get(i) ?? ""],
+    );
+  });
   const root = await realpath(dirname(source));
   const binary: Buffer[] = [];
   const bufferViews: object[] = [],
@@ -143,13 +216,13 @@ async function convertPmxFiles(source: string, output: string, mouthName: string
     return accessors.length - 1;
   };
   const position = accessor(
-    posed.vertices.flatMap((v) => v.position),
+    sculpted.flatMap((v) => v.position),
     "VEC3",
     false,
     true,
   );
   const normal = accessor(
-    posed.vertices.flatMap((v) => v.normal),
+    sculpted.flatMap((v) => v.normal),
     "VEC3",
   );
   const uv = accessor(
@@ -158,14 +231,14 @@ async function convertPmxFiles(source: string, output: string, mouthName: string
   );
   // A second UV channel transports the original per-vertex outline multiplier.
   const edge = accessor(
-    pmx.vertices.flatMap((v) => [v.edgeRatio, 0]),
+    sculpted.flatMap((v) => [v.edgeRatio, 0]),
     "VEC2",
   );
   const targets = morphs.map((morph) => {
     const deltas = Array(pmx.vertices.length * 3).fill(0) as number[];
     for (const element of morph.elements) {
       if (element.index >= pmx.vertices.length || !element.position) throw new Error("表情顶点无效");
-      posed.delta(element.index, element.position).forEach((v, axis) => {
+      sculpted[element.index]?.delta(posed.delta(element.index, element.position)).forEach((v, axis) => {
         deltas[element.index * 3 + axis] = v;
       });
     }
@@ -174,7 +247,8 @@ async function convertPmxFiles(source: string, output: string, mouthName: string
   const images: { uri: string }[] = [],
     textures: { source: number }[] = [];
   const usedTextures = new Map<number, number>();
-  const textureHashes: { path: string; sha256: string }[] = [];
+  const textureHashes: { path: string; sha256: string; replacement?: { path: string; sha256: string } }[] = [];
+  const usedOverrides = new Set<string>();
   for (const index of new Set(
     pmx.materials.flatMap((m) => [m.textureIndex, m.toonFlag === 0 ? m.toonIndex : -1]).filter((i) => i >= 0),
   )) {
@@ -184,8 +258,18 @@ async function convertPmxFiles(source: string, output: string, mouthName: string
       rel = relative(root, resolved);
     if (rel === ".." || rel.startsWith("../") || isAbsolute(rel) || (await stat(resolved)).size > 16 * 1024 * 1024)
       throw new Error("贴图越界或过大");
+    const replacement = look.textures?.[path];
+    let input = resolved;
+    if (replacement) {
+      const lookRoot = await realpath(lookDirectory);
+      input = await realpath(join(lookRoot, replacement));
+      const local = relative(lookRoot, input);
+      if (local === ".." || local.startsWith("../") || isAbsolute(local) || (await stat(input)).size > 16 * 1024 * 1024)
+        throw new Error("替换贴图越界或过大");
+      usedOverrides.add(path);
+    }
     const name = `texture-${images.length}.png`;
-    await run("ffmpeg", ["-v", "error", "-nostdin", "-i", resolved, "-frames:v", "1", join(output, name)], {
+    await run("ffmpeg", ["-v", "error", "-nostdin", "-i", input, "-frames:v", "1", join(output, name)], {
       timeout: 30_000,
     });
     usedTextures.set(index, images.length);
@@ -193,11 +277,23 @@ async function convertPmxFiles(source: string, output: string, mouthName: string
     images.push({ uri: name });
     textureHashes.push({
       path,
+      ...(replacement
+        ? {
+            replacement: {
+              path: replacement,
+              sha256: createHash("sha256")
+                .update(await readFile(input))
+                .digest("hex"),
+            },
+          }
+        : {}),
       sha256: createHash("sha256")
         .update(await readFile(resolved))
         .digest("hex"),
     });
   }
+  if (Object.keys(look.textures ?? {}).some((path) => !usedOverrides.has(path)))
+    throw new Error("替换贴图未匹配源模型");
   let faceOffset = 0;
   const primitives = pmx.materials.map((material, i) => {
     const faces = pmx.faces.slice(faceOffset, faceOffset + material.faceCount);
@@ -235,8 +331,8 @@ async function convertPmxFiles(source: string, output: string, mouthName: string
       meshes: primitives.map((primitive, i) => ({
         name: `part_${i}`,
         primitives: [primitive],
-        weights: [0, 0],
-        extras: { targetNames: ["mouth", "blink"] },
+        weights: morphs.map(() => 0),
+        extras: { targetNames: ["mouth", "blink", ...(look.restEyes ? ["restEyes"] : [])] },
       })),
       buffers: [{ uri: "avatar.bin", byteLength: offset }],
       bufferViews,
@@ -264,7 +360,7 @@ async function convertPmxFiles(source: string, output: string, mouthName: string
     { timeout: 120_000 },
   );
   const bounds = [0, 1, 2].map((axis) =>
-    posed.vertices.reduce(
+    sculpted.reduce(
       (range, v) => [
         Math.min(range[0] ?? Infinity, v.position[axis] ?? 0),
         Math.max(range[1] ?? -Infinity, v.position[axis] ?? 0),
@@ -280,10 +376,12 @@ async function convertPmxFiles(source: string, output: string, mouthName: string
     depth: Math.max(0.01, (bounds[2]?.[1] ?? 0) - (bounds[2]?.[0] ?? 0)),
     centerX: ((bounds[0]?.[1] ?? 0) + (bounds[0]?.[0] ?? 0)) / 2,
     framing: { yaw: 0, zoom: 1, targetY: 0 },
+    ...(look.restEyes ? { restEyes: look.restEyes.weight } : {}),
     parts: pmx.materials.map((material, i) => ({
       mesh: `qt/meshes/part_${i}_mesh.mesh`,
       color: material.diffuse.map((v) => Math.max(0, Math.min(1, v))),
       doubleSided: !!(material.flag & 1),
+      ...(look.materials[material.name] ? { style: look.materials[material.name] } : {}),
       toon: {
         ambient: material.ambient.map((v) => Math.max(0, Math.min(1, v))),
         specular: material.specular.map((v) => Math.max(0, Math.min(1, v))),
@@ -307,12 +405,14 @@ async function convertPmxFiles(source: string, output: string, mouthName: string
     join(output, "conversion.json"),
     `${JSON.stringify(
       {
-        version: 2,
-        sourceSha256: createHash("sha256").update(bytes).digest("hex"),
+        version: 4,
+        sourceSha256,
+        ...(exchange ? { blender: exchange } : {}),
         textures: textureHashes,
         pose,
         armRotationDegrees: pose === "relaxed" ? { 左腕: -38, 右腕: 38 } : {},
-        morphs: [mouthName, blinkName],
+        morphs: morphNames,
+        look,
         shading: "PMX diffuse + ambient, authored toon ramps, vertex-weighted inverted hull outlines",
         limitations: [
           "static BDEF skinning (SDEF approximated)",

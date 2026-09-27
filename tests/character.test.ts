@@ -188,7 +188,8 @@ it("projects toon settings and rejects missing or escaping ramp textures", async
     width: 8,
     depth: 4,
     framing: { yaw: -5, zoom: 1.1, targetY: 0.1 },
-    parts: [{ mesh: "model.mesh", color: [1, 1, 1, 1], toon }],
+    restEyes: 0.2,
+    parts: [{ mesh: "model.mesh", color: [1, 1, 1, 1], toon, style: { tint: [0.9, 0.8, 0.7], textureStrength: 0.03 } }],
   };
   await writeFile(join(root, "avatar.json"), JSON.stringify(manifest));
   await writeFile(join(root, "model.mesh"), Buffer.alloc(64));
@@ -201,6 +202,12 @@ it("projects toon settings and rejects missing or escaping ramp textures", async
   let catalog = await loadCharacters(directory);
   expect(catalog.warnings).toEqual([]);
   expect(catalog.entries[1]?.avatar?.framing).toEqual(manifest.framing);
+  expect(catalog.entries[1]?.avatar?.restEyes).toBe(0.2);
+  expect(catalog.entries[1]?.avatar?.parts[0]?.style).toMatchObject({
+    tint: [0.9, 0.8, 0.7],
+    textureStrength: 0.03,
+    outlineScale: 1,
+  });
   expect(catalog.entries[1]?.avatar?.parts[0]?.toon?.rampUrl).toMatch(/\/demo\/ramp.png$/);
   await rm(join(root, "ramp.png"));
   await writeFile(join(directory, "outside.png"), png);

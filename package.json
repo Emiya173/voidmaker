@@ -18,7 +18,9 @@
     "aec:replay": "tsx apps/tools/src/aec-replay.ts",
     "aec:session-smoke": "tsx apps/tools/src/aec-session-smoke.ts",
     "character:import": "tsx apps/tools/src/character-import.ts",
-    "character:pmx": "tsx apps/tools/src/character-convert-pmx.ts"
+    "character:pmx": "tsx apps/tools/src/character-convert-pmx.ts",
+    "character:roundtrip": "tsx apps/tools/src/character-roundtrip.ts",
+    "character:inspect": "tsx apps/tools/src/character-inspect.ts"
   },
   "dependencies": {
     "dbus-next": "0.10.2",
