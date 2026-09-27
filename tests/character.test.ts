@@ -159,6 +159,56 @@ it("falls back from missing or escaping 3D resources without losing the characte
   expect(catalog.entries[1]?.avatar).toBeUndefined();
   expect(catalog.warnings).toHaveLength(1);
 });
+it("projects toon settings and rejects missing or escaping ramp textures", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "voidmaker-toon-"));
+  paths.push(directory);
+  const root = join(directory, "demo");
+  await mkdir(root);
+  await writeFile(
+    join(root, "character.json"),
+    JSON.stringify({
+      version: 1,
+      id: "demo",
+      name: "Demo",
+      persona: "test",
+      avatar: { kind: "quick3d", manifest: "avatar.json" },
+    }),
+  );
+  const toon = {
+    ambient: [0.5, 0.5, 0.5],
+    specular: [0, 0, 0],
+    shininess: 50,
+    edgeColor: [0, 0, 0, 1],
+    edgeSize: 1,
+    ramp: "ramp.png",
+  };
+  const manifest = {
+    height: 20,
+    centerY: 10,
+    width: 8,
+    depth: 4,
+    framing: { yaw: -5, zoom: 1.1, targetY: 0.1 },
+    parts: [{ mesh: "model.mesh", color: [1, 1, 1, 1], toon }],
+  };
+  await writeFile(join(root, "avatar.json"), JSON.stringify(manifest));
+  await writeFile(join(root, "model.mesh"), Buffer.alloc(64));
+  expect((await loadCharacters(directory)).entries[1]?.avatar).toBeUndefined();
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH1UAAAAASUVORK5CYII=",
+    "base64",
+  );
+  await writeFile(join(root, "ramp.png"), png);
+  let catalog = await loadCharacters(directory);
+  expect(catalog.warnings).toEqual([]);
+  expect(catalog.entries[1]?.avatar?.framing).toEqual(manifest.framing);
+  expect(catalog.entries[1]?.avatar?.parts[0]?.toon?.rampUrl).toMatch(/\/demo\/ramp.png$/);
+  await rm(join(root, "ramp.png"));
+  await writeFile(join(directory, "outside.png"), png);
+  await symlink(join(directory, "outside.png"), join(root, "ramp.png"));
+  catalog = await loadCharacters(directory);
+  expect(catalog.entries[1]?.avatar).toBeUndefined();
+  expect(catalog.warnings).toHaveLength(1);
+});
 it("rejects concurrent/busy switches and retains the previous character on failure or late shutdown", async () => {
   const other = { ...defaultCharacter, id: "other", name: "Other" };
   let resolve!: (binding: { sessionId: string; threadId: string }) => void;

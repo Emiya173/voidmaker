@@ -135,10 +135,31 @@ export async function loadCharacters(
                 textureUrl: part.texture ? await portrait(dirname(manifestPath), part.texture) : "",
                 color: part.color,
                 doubleSided: part.doubleSided,
+                ...(part.toon
+                  ? {
+                      toon: {
+                        ambient: part.toon.ambient,
+                        specular: part.toon.specular,
+                        shininess: part.toon.shininess,
+                        edgeColor: part.toon.edgeColor,
+                        edgeSize: part.toon.edgeSize,
+                        rampUrl: part.toon.ramp ? await portrait(dirname(manifestPath), part.toon.ramp) : "",
+                      },
+                    }
+                  : {}),
               };
             }),
           );
-          avatar = { kind: "quick3d", height: manifest.height, centerY: manifest.centerY, parts };
+          avatar = {
+            kind: "quick3d",
+            height: manifest.height,
+            centerY: manifest.centerY,
+            ...(manifest.width === undefined ? {} : { width: manifest.width }),
+            ...(manifest.depth === undefined ? {} : { depth: manifest.depth }),
+            centerX: manifest.centerX,
+            framing: manifest.framing,
+            parts,
+          };
         } catch {
           warnings.push(`${definition.name}：3D 素材不可用，使用立绘回退`);
         }

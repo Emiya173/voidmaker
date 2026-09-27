@@ -105,6 +105,8 @@ QML 只显示 Host 投影，不自行判断业务轮次或从计时器伪造说�
 ```sh
 pnpm character:import /path/to/character.char /path/to/characters/chiaki chiaki http://127.0.0.1:9881/tts
 pnpm character:pmx /path/to/nanami_ver1.0.1.pmx /path/to/characters/chiaki/avatar
+# 可选：为具备「左腕」「右腕」骨骼的模型烘焙收臂站姿
+pnpm character:pmx /path/to/nanami_ver1.0.1.pmx /path/to/characters/chiaki/avatar-relaxed --pose relaxed
 ```
 
 导入工具拒绝覆盖、越界 ZIP 路径和重名素材，限制解压文件数及总大小；不会执行 pickle 或包内脚本。
@@ -116,9 +118,30 @@ pnpm character:pmx /path/to/nanami_ver1.0.1.pmx /path/to/characters/chiaki/avata
 ```
 
 `avatar.json` 列出经过转换的 `.mesh`、PNG 贴图、颜色、双面材质和镜头尺寸。
+2026-09-27 的显示优化保留 PMX 环境色、高光、专用 Toon 阴影贴图、材质描边色/宽度和逐顶点描边权重。
+渲染采用柔和前上方光源、原模型色阶和反向外壳描边，贴图开启 mipmap，保留 MSAA 抗锯齿。
+透明表情材质单独混合，不让不透明衣物进入透明排序；描边与身体共用相同口型/眨眼权重。
+着色器遵循 [Qt CustomMaterial 的颜色与着色接口](https://doc.qt.io/qt-6/qml-qtquick3d-custommaterial.html)，
+属于面向桌宠的 MMD 风格近似，不是 MMD/MME 的完整复刻，也没有实时投射阴影。
+
+新的转换会额外生成 `conversion.json`，记录原始 PMX/纹理哈希、转换格式版本、站姿角度、表情名称与丢弃能力。
+输出目录仍须是新目录；原始 PMX 和贴图不被修改。旧 `avatar.json` 可继续加载，获得新材质需重新转换。
+
+`--pose original`（默认）保留初始姿态；`--pose relaxed` 将两侧上臂各收拢 38°，
+沿骨骼父子关系烘焙蒙皮顶点、法线和表情位移，不在 QML 中运行骨骼逻辑。
+缺少唯一的「左腕」「右腕」或骨骼层级无效会拒绝转换。该预设适用于当前七海模型，其他模型需重新检查穿插。
+SDEF 采用 BDEF2 权重近似，不求解 IK、附加旋转或物理；这不是运行时骨骼动画支持。
+
+新 manifest 的 `width`/`depth` 用于适配面板宽度，`centerX`/`centerY` 用于居中。
+可在 `avatar.json` 中配置 `"framing": {"yaw": -5, "zoom": 1, "targetY": 0}`：
+`yaw` 是模型朝向（±45°），`zoom` 是取景倍率（0.5–3），`targetY` 是镜头相对模型中心的高度偏移（身高比例，±0.5）。
+例如 `zoom: 2, targetY: 0.26` 可用于上半身特写；放大可能裁切手脚。修改后重启 Host。
+保持 `character.json` 的素材入口不变，仅替换 avatar 内容时，不改变角色人设版本/聊天历史映射。
+
 运行时只读取数据与素材，不执行 Balsam 生成的 QML。每个网格固定两个顶点 morph：
 第 0 个口型「あ」、第 1 个眨眼「まばたき」。其他模型需具备这两个日文命名的顶点表情，或在转换接口中指定名称。
-当前保留模型原始静止姿态，支持口型、自动眨眼、轻微整体起伏；没有导出骨骼、VMD、刚体、布料物理或 MMD 特殊着色器。
+支持原始/烘焙站姿、口型、自动眨眼、轻微整体起伏；没有导出运行时骨骼、VMD、刚体、布料物理或球面贴图。
+共用 Toon 贴图目前使用程序色阶近似，七海使用的五张专用色阶则全部保留。
 不能将本功能等同完整 MMD 播放器或 VRM 导入器。Live2D 渲染器尚未实现，可后续扩展 `avatar.kind`。
 
 Quickshell 必须与 Qt Quick 3D 来自相同 Nix 锁定环境，用 `nix develop --command quickshell --path apps/shell/shell.qml` 启动。
@@ -129,6 +152,10 @@ Flake 已提供 Qt QML/插件路径。系统全局 Quickshell 可能使用另一
 角色仍使用左下 layer-shell 面板和原有鼠标穿透，不修改 niri 普通窗口规则。
 口型完全由现有播放 PCM 投影驱动；停止后归零，UI 断连也立即闭嘴并停止眨眼/起伏。
 高频播放状态更新复用现有 3D 委托，不反复创建网格。全局语音设置页仍编辑默认服务，诊断检查当前选中角色的 TTS。
+
+转换器专项回归可在 Nix 环境运行 `VOIDMAKER_PMX_SMOKE=1 pnpm test tests/character-convert.test.ts`。
+它动态生成自制三角形 PMX/BMP，实际执行 ffmpeg/Balsam，检查第二组 UV 描边数据、两个 morph、来源记录，
+以及坏索引/缺阴影贴图的失败清理；不依赖下载角色素材。
 
 七海千秋服务模板见 [voidmaker-tts-chiaki.service](systemd/voidmaker-tts-chiaki.service)，
 `~/.config/voidmaker/tts-chiaki.yaml` 的 `custom` 配置须设为 `version: v2ProPlus`，

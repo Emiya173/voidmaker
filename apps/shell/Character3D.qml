@@ -8,39 +8,62 @@ View3D {
     property bool online: true
     property real blink: 0
     property real breath: 0
+    readonly property var framing: avatar.framing || ({yaw: 0, zoom: 1, targetY: 0})
+    readonly property real modelScale: 20 / avatar.height
+    readonly property real yawRadians: framing.yaw * Math.PI / 180
+    readonly property real fitWidth: avatar.width
+        ? (avatar.width * Math.abs(Math.cos(yawRadians)) + (avatar.depth || 0) * Math.abs(Math.sin(yawRadians))) * modelScale + 1.2
+        : 20
     environment: SceneEnvironment {
         backgroundMode: SceneEnvironment.Transparent
         antialiasingMode: SceneEnvironment.MSAA
         antialiasingQuality: SceneEnvironment.High
+        tonemapMode: SceneEnvironment.TonemapModeLinear
     }
     camera: OrthographicCamera {
         z: 60
+        y: scene.framing.targetY * 20
         clipNear: 0.1
         clipFar: 200
-        horizontalMagnification: Math.max(1, Math.min(scene.height / 23, scene.width / 20))
+        horizontalMagnification: Math.max(1, Math.min(scene.height / 21.5, scene.width / scene.fitWidth)) * scene.framing.zoom
         verticalMagnification: horizontalMagnification
     }
     Node {
         // Normalize every model to 20 scene units, centered vertically.
-        scale: Qt.vector3d(20 / scene.avatar.height, 20 / scene.avatar.height, 20 / scene.avatar.height)
-        y: -scene.avatar.centerY * 20 / scene.avatar.height + scene.breath
-        Repeater3D {
-            model: scene.avatar.parts
-            delegate: Model {
-                required property var modelData
-                source: modelData.meshUrl
-                materials: PrincipledMaterial {
-                    lighting: PrincipledMaterial.NoLighting
-                    baseColor: Qt.rgba(modelData.color[0], modelData.color[1], modelData.color[2], modelData.color[3])
-                    baseColorMap: Texture { source: modelData.textureUrl }
-                    cullMode: modelData.doubleSided ? Material.NoCulling : Material.BackFaceCulling
-                    alphaMode: modelData.color[3] < 1 ? PrincipledMaterial.Blend : PrincipledMaterial.Mask
-                    alphaCutoff: 0.1
+        eulerRotation.y: scene.framing.yaw
+        Node {
+            scale: Qt.vector3d(scene.modelScale, scene.modelScale, scene.modelScale)
+            x: -(scene.avatar.centerX || 0) * scene.modelScale
+            y: -scene.avatar.centerY * scene.modelScale + scene.breath
+            Repeater3D {
+                model: scene.avatar.parts
+                delegate: Node {
+                    id: part
+                    required property var modelData
+                    Model {
+                        source: modelData.meshUrl
+                        materials: CharacterMaterial { part: part.modelData }
+                        morphTargets: [
+                            MorphTarget { weight: scene.online ? scene.mouth : 0; attributes: MorphTarget.Position },
+                            MorphTarget { weight: scene.online ? scene.blink : 0; attributes: MorphTarget.Position }
+                        ]
+                    }
+                    Model {
+                        visible: !!modelData.toon && modelData.toon.edgeSize > 0 && modelData.color[3] >= 1 && modelData.toon.edgeColor[3] > 0
+                        source: modelData.meshUrl
+                        materials: CustomMaterial {
+                            property real uEdgeWidth: part.modelData.toon ? part.modelData.toon.edgeSize * 0.025 / scene.modelScale : 0
+                            property vector4d uEdgeColor: part.modelData.toon ? Qt.vector4d(...part.modelData.toon.edgeColor) : Qt.vector4d(0, 0, 0, 1)
+                            cullMode: Material.FrontFaceCulling
+                            vertexShader: "shaders/character-outline.vert"
+                            fragmentShader: "shaders/character-outline.frag"
+                        }
+                        morphTargets: [
+                            MorphTarget { weight: scene.online ? scene.mouth : 0; attributes: MorphTarget.Position },
+                            MorphTarget { weight: scene.online ? scene.blink : 0; attributes: MorphTarget.Position }
+                        ]
+                    }
                 }
-                morphTargets: [
-                    MorphTarget { weight: scene.online ? scene.mouth : 0; attributes: MorphTarget.Position },
-                    MorphTarget { weight: scene.online ? scene.blink : 0; attributes: MorphTarget.Position }
-                ]
             }
         }
     }

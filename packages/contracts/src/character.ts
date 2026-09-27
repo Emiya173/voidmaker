@@ -16,10 +16,33 @@ const color = z.tuple([
   z.number().min(0).max(1),
   z.number().min(0).max(1),
 ]);
+const rgb = z.tuple([z.number().min(0).max(1), z.number().min(0).max(1), z.number().min(0).max(1)]);
+const toon = z
+  .object({
+    ambient: rgb,
+    specular: rgb,
+    shininess: z.number().min(0).max(1000),
+    ramp: asset.optional(),
+    edgeColor: color,
+    edgeSize: z.number().min(0).max(10),
+  })
+  .strict();
+const framing = z
+  .object({
+    yaw: z.number().min(-45).max(45).default(0),
+    zoom: z.number().min(0.5).max(3).default(1),
+    // Offset from the model center, as a fraction of its height.
+    targetY: z.number().min(-0.5).max(0.5).default(0),
+  })
+  .strict();
 export const avatarManifest = z
   .object({
     height: z.number().positive().max(100000),
     centerY: z.number().min(-100000).max(100000),
+    width: z.number().positive().max(100000).optional(),
+    depth: z.number().positive().max(100000).optional(),
+    centerX: z.number().min(-100000).max(100000).default(0),
+    framing: framing.default({ yaw: 0, zoom: 1, targetY: 0 }),
     parts: z
       .array(
         z
@@ -28,6 +51,7 @@ export const avatarManifest = z
             texture: asset.optional(),
             color,
             doubleSided: z.boolean().default(false),
+            toon: toon.optional(),
           })
           .strict(),
       )
@@ -39,7 +63,17 @@ export type AvatarPresentation = Readonly<{
   kind: "quick3d";
   height: number;
   centerY: number;
-  parts: readonly Readonly<{ meshUrl: string; textureUrl: string; color: readonly number[]; doubleSided: boolean }>[];
+  width?: number;
+  depth?: number;
+  centerX?: number;
+  framing?: Readonly<z.infer<typeof framing>>;
+  parts: readonly Readonly<{
+    meshUrl: string;
+    textureUrl: string;
+    color: readonly number[];
+    doubleSided: boolean;
+    toon?: Readonly<Omit<z.infer<typeof toon>, "ramp"> & { rampUrl: string }>;
+  }>[];
 }>;
 export const characterDefinition = z
   .object({
