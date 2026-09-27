@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { expect, it } from "vitest";
 
 it.skipIf(process.env.VOIDMAKER_TRAY_SMOKE !== "1")(
-  "registers with a late tray watcher, routes activation and re-registers after restart",
+  "exports an actionable menu, ignores non-click events and re-registers after watcher restart",
   async () => {
     const result = await promisify(execFile)(
       "dbus-run-session",

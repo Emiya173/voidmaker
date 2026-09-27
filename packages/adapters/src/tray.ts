@@ -1,5 +1,7 @@
 import dbus from "dbus-next";
 import type { DiagnosticResult } from "../../contracts/src/settings.js";
+import type { TrayAction } from "../../contracts/src/shell.js";
+import { TrayMenu, trayMenuPath } from "./tray-menu.js";
 
 const watcherName = "org.kde.StatusNotifierWatcher";
 const itemPath = "/StatusNotifierItem";
@@ -18,19 +20,19 @@ class TrayItem extends dbus.interface.Interface {
   readonly AttentionIconPixmap: unknown[] = [];
   readonly AttentionMovieName = "";
   readonly ItemIsMenu = false;
-  readonly Menu = "/";
-  readonly ToolTip = ["face-smile", [], "VoidMaker", "左键显示/隐藏；右键打开设置"];
-  constructor(private readonly activate: (settings: boolean) => void) {
+  readonly Menu = trayMenuPath;
+  readonly ToolTip = ["face-smile", [], "VoidMaker", "左键显示/隐藏；右键打开菜单"];
+  constructor(private readonly activate: (action: TrayAction) => void) {
     super("org.kde.StatusNotifierItem");
   }
   Activate(): void {
-    this.activate(false);
+    this.activate({ type: "toggle" });
   }
   SecondaryActivate(): void {
-    this.activate(false);
+    this.activate({ type: "toggle" });
   }
   ContextMenu(): void {
-    this.activate(true);
+    this.activate({ type: "open", page: "settings" });
   }
   Scroll(): void {}
 }
@@ -71,7 +73,7 @@ export class TrayService {
     status: "unconfigured",
     detail: "尚未连接会话总线",
   };
-  constructor(private readonly activate: (settings: boolean) => void) {}
+  constructor(private readonly activate: (action: TrayAction) => void) {}
   get status(): DiagnosticResult {
     return this.state;
   }
@@ -89,12 +91,11 @@ export class TrayService {
             detail: "会话总线连接失败；可用快捷键打开界面",
           };
       });
-      bus.export(
-        itemPath,
-        new TrayItem((settings) => {
-          if (!this.closed) this.activate(settings);
-        }),
-      );
+      const activate = (action: TrayAction): void => {
+        if (!this.closed) this.activate(action);
+      };
+      bus.export(trayMenuPath, new TrayMenu(activate));
+      bus.export(itemPath, new TrayItem(activate));
       void this.connect(bus).catch(() => {
         if (!this.closed)
           this.state = { id: "tray", label: "系统托盘", status: "error", detail: "托盘连接失败；可用快捷键打开界面" };

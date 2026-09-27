@@ -69,9 +69,17 @@ class Host {
   private readonly diagnostics = new DiagnosticsController((diagnostics) =>
     this.broadcast({ type: "diagnostics", diagnostics }),
   );
-  private readonly tray = new TrayService((settings) =>
-    this.broadcast({ type: "shell_visibility", action: settings ? "show" : "toggle", settings }),
-  );
+  private readonly tray = new TrayService((action) => {
+    if (action.type === "stop") {
+      void this.stop().catch((error: unknown) =>
+        this.broadcast({ type: "error", message: error instanceof Error ? error.message : String(error) }),
+      );
+    } else if (action.type === "open") {
+      this.broadcast({ type: "shell_visibility", action: "show", page: action.page });
+    } else {
+      this.broadcast({ type: "shell_visibility", action: "toggle" });
+    }
+  });
   private readonly work: WorkManager;
   private readonly desktop: DesktopController;
   private readonly desktopStore = new DesktopStore(process.env.DATABASE_URL);

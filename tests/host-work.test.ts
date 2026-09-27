@@ -75,7 +75,7 @@ it.skipIf(!url)(
       await once(socket, "connect");
       events = [];
       createInterface({ input: socket }).on("line", (line) => events.push(JSON.parse(line) as ServerEvent));
-      send({ type: "hello", version: 7 });
+      send({ type: "hello", version: 8 });
       await expect.poll(() => events.some((e) => e.type === "snapshot")).toBe(true);
     }
     function send(value: unknown) {

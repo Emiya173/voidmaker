@@ -30,5 +30,4 @@ export type DiagnosticsSnapshot = Readonly<{
 export type SettingsEvent =
   | { type: "settings_applied" }
   | { type: "settings"; settings: SettingsSnapshot }
-  | { type: "diagnostics"; diagnostics: DiagnosticsSnapshot }
-  | { type: "shell_visibility"; action: "toggle" | "show"; settings: boolean };
+  | { type: "diagnostics"; diagnostics: DiagnosticsSnapshot };

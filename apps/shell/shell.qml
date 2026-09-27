@@ -28,12 +28,20 @@ ShellRoot {
         interfaceVisible = value
         send({type:"desktop_presence",idle:!value || activity.isIdle})
     }
+    function openPage(page) {
+        const pages = {chat: 0, desktop: 1, work: 2, history: 3, settings: 4, diagnostics: 4}
+        if (pages[page] === undefined) return
+        root.setVisibility(true)
+        tabs.currentIndex = pages[page]
+        if (page === "settings" || page === "diagnostics")
+            settingsPanel.currentSection = page === "diagnostics" ? 1 : 0
+    }
     IpcHandler {
         target: "voidmaker"
         function toggle(): void { root.setVisibility(!root.interfaceVisible) }
         function showUi(): void { root.setVisibility(true) }
         function hideUi(): void { root.setVisibility(false) }
-        function settings(): void { root.setVisibility(true); tabs.currentIndex = 4 }
+        function settings(): void { root.openPage("settings") }
         function visible(): bool { return root.interfaceVisible }
     }
     function send(command) {
@@ -64,11 +72,11 @@ ShellRoot {
         switch (event.type) {
         case "settings": settingsBusy = event.settings.busy; break
         case "shell_visibility":
-            root.setVisibility(event.action === "show" ? true : !root.interfaceVisible)
-            if(event.settings) tabs.currentIndex = 4
+            if (event.action === "show") root.openPage(event.page)
+            else if (event.action === "toggle") root.setVisibility(!root.interfaceVisible)
             break
         case "snapshot":
-            if (event.version !== 7) { errorText = "界面与服务协议版本不匹配"; return }
+            if (event.version !== 8) { errorText = "界面与服务协议版本不匹配"; return }
             if (sessionId !== event.sessionId) input.text = ""
             sessionId = event.sessionId
             character = event.character
@@ -100,7 +108,7 @@ ShellRoot {
         path: Quickshell.env("VOIDMAKER_SOCKET") || (Quickshell.env("XDG_RUNTIME_DIR") + "/voidmaker/host.sock")
         onMessage: line => root.receive(line)
         onConnectedChanged: {
-            if (connected) { root.errorText = ""; root.send({ type: "hello", version: 7 }); if (workPanel.selectedId) root.send({type: "work_get", id: workPanel.selectedId}) }
+            if (connected) { root.errorText = ""; root.send({ type: "hello", version: 8 }); if (workPanel.selectedId) root.send({type: "work_get", id: workPanel.selectedId}) }
             else { root.status = "offline"; root.approvalId = ""; root.voice = null; root.desktop = null }
         }
     }
