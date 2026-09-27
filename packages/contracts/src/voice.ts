@@ -2,7 +2,7 @@ import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { aecConfigSchema } from "./aec.js";
 
-const localUrl = z.url().refine((value) => {
+export const localUrl = z.url().refine((value) => {
   const url = new URL(value);
   return (
     ["http:", "https:"].includes(url.protocol) &&

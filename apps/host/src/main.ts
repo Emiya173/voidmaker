@@ -6,7 +6,12 @@ import { dirname, join } from "node:path";
 import { openAecSession } from "../../../packages/adapters/src/aec-session.js";
 import { inspectArtifact, projectPath } from "../../../packages/adapters/src/artifacts.js";
 import { captureAudio, playAudio } from "../../../packages/adapters/src/audio-process.js";
-import { type Character, type CharacterCatalog, loadCharacters } from "../../../packages/adapters/src/characters.js";
+import {
+  type Character,
+  type CharacterCatalog,
+  characterTts,
+  loadCharacters,
+} from "../../../packages/adapters/src/characters.js";
 import { CodexAppServer } from "../../../packages/adapters/src/codex.js";
 import { Database } from "../../../packages/adapters/src/database.js";
 import { desktopAdapters } from "../../../packages/adapters/src/desktop.js";
@@ -123,7 +128,10 @@ class Host {
         if (!character) throw new Error("角色不存在");
         return this.history.select(character, binding.sessionId);
       },
-      publish: () => this.publishCharacter(),
+      publish: () => {
+        this.publishCharacter();
+        this.broadcast({ type: "voice", voice: this.voice.snapshot });
+      },
     });
     this.desktop = new DesktopController(join(dirname(socketPath), "desktop"), {
       adapters: desktopAdapters(),
@@ -163,8 +171,9 @@ class Host {
           return transcribe(wav, voiceConfig.asr, signal);
         },
         synthesize: (text, signal) => {
-          if (!voiceConfig.tts) throw new Error("未配置 TTS");
-          return synthesize(text, { ...voiceConfig.tts, ...this.character.current.voice }, signal);
+          const config = characterTts(voiceConfig.tts, this.character.current);
+          if (!config) throw new Error("未配置 TTS");
+          return synthesize(text, config, signal);
         },
         play: (wav, signal, onProgress) =>
           playAudio(
@@ -184,7 +193,7 @@ class Host {
         },
       },
       Boolean(voiceConfig.asr),
-      Boolean(voiceConfig.tts),
+      () => Boolean(characterTts(voiceConfig.tts, this.character.current)),
       Boolean(voiceConfig.aec?.bargeIn),
     );
     return controller;
@@ -399,7 +408,9 @@ class Host {
 
   private checkServices(): void {
     if (this.settings.snapshot.busy) throw new Error("设置正在保存，请稍候");
-    const config = this.settings.snapshot.config;
+    const settings = this.settings.snapshot.config;
+    const selectedTts = characterTts(settings.tts, this.character.current);
+    const config: VoiceConfig = { ...settings, ...(selectedTts ? { tts: selectedTts } : {}) };
     let reading: ReturnType<typeof inspectDevices> | undefined;
     const devices = (signal: AbortSignal) => (reading ??= inspectDevices(signal));
     this.diagnostics.start(

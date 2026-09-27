@@ -1,8 +1,10 @@
 # 角色与桌宠视图
 
+后续功能与验收清单见 [角色后续待办](CHARACTER_TODO.md)。
+
 ## 使用
 
-新应用支持角色选择、角色设定、独立聊天历史/线程、静态立绘、状态差分和基础口型。
+新应用支持角色选择、角色设定、独立聊天历史/线程、静态立绘、状态差分、Qt Quick 3D 和基础口型。
 Host/UI 协议升级为 **v8**，应同时更新。缺少角色包时仍可使用内置 VoidMaker 和几何占位形象。
 
 角色目录默认为 `$XDG_DATA_HOME/voidmaker/characters`（通常是 `~/.local/share/voidmaker/characters`），
@@ -43,10 +45,11 @@ Host/UI 协议升级为 **v8**，应同时更新。缺少角色包时仍可使�
 }
 ```
 
-`portraits`、`voice` 均可省略；配置了 `portraits` 时 `idle` 必填，其余图片可选。
-省略角色 `voice` 时沿用全局已配置的 TTS。角色 voice 仅覆盖参考音频/文本/语言，
-服务地址、超时和模型权重仍由全局配置及独立模型服务管理；不会因选择角色自动加载旧权重或启动 Python。
-没有全局 TTS 服务时，配置角色参考音频也不会自动启用朗读。
+`portraits`、`voice`、`avatar` 均可省略；配置了 `portraits` 时 `idle` 必填，其余图片可选。
+省略角色 `voice` 时沿用全局已配置的 TTS。未设置角色 `voice.url` 时仅覆盖参考音频/文本/语言；
+设置 `voice.url` 可指向角色专用回环 HTTP TTS 端点，此时不继承全局健康检查地址，
+没有全局 TTS 配置也能朗读。权重仍由独立模型服务管理；选择角色不会切换共享服务的权重或启动 Python。
+只有参考音频、没有独立 URL 和全局 TTS 时不会启用朗读。
 
 - `id` 为小写字母/数字/下划线/连字符，最长 64 字符；`default` 保留给内置助手。
 - `layered=false`（默认）：各状态图是完整立绘。`layered=true`：始终显示 idle 基础层，其余为同画布差分叠层。
@@ -94,3 +97,45 @@ QML 只显示 Host 投影，不自行判断业务轮次或从计时器伪造说�
 - 本次沿用全局声音，没有验证独立角色声线或加载旧日语模型权重，也没有开启麦克风。
 - 随后重播较长语句，记录到 38 次图片切换，结束后闭嘴并清空字幕。用户对“口型能看到变化、结束后闭嘴/字幕消失/待命”的反馈为 **“都正常”**。
 - 角色切换、历史隔离和重启恢复有 Host 进程回归及本机选择/恢复证据；不同素材包和独立角色声线不由本轮覆盖。
+
+## Shinsekai 导入与 PMX 显示（2026-09-27）
+
+进入 `nix develop` 后运行，两个目标目录都必须是新目录：
+
+```sh
+pnpm character:import /path/to/character.char /path/to/characters/chiaki chiaki http://127.0.0.1:9881/tts
+pnpm character:pmx /path/to/nanami_ver1.0.1.pmx /path/to/characters/chiaki/avatar
+```
+
+导入工具拒绝覆盖、越界 ZIP 路径和重名素材，限制解压文件数及总大小；不会执行 pickle 或包内脚本。
+转换工具使用锁定的 MIT `mmd-parser` 和 Nix 中的 Qt `balsam`。原 PMX 及贴图必须放在同一素材树内。
+在生成的 `character.json` 中增加：
+
+```json
+"avatar": { "kind": "quick3d", "manifest": "avatar/avatar.json" }
+```
+
+`avatar.json` 列出经过转换的 `.mesh`、PNG 贴图、颜色、双面材质和镜头尺寸。
+运行时只读取数据与素材，不执行 Balsam 生成的 QML。每个网格固定两个顶点 morph：
+第 0 个口型「あ」、第 1 个眨眼「まばたき」。其他模型需具备这两个日文命名的顶点表情，或在转换接口中指定名称。
+当前保留模型原始静止姿态，支持口型、自动眨眼、轻微整体起伏；没有导出骨骼、VMD、刚体、布料物理或 MMD 特殊着色器。
+不能将本功能等同完整 MMD 播放器或 VRM 导入器。Live2D 渲染器尚未实现，可后续扩展 `avatar.kind`。
+
+Quickshell 必须与 Qt Quick 3D 来自相同 Nix 锁定环境，用 `nix develop --command quickshell --path apps/shell/shell.qml` 启动。
+Flake 已提供 Qt QML/插件路径。系统全局 Quickshell 可能使用另一 Qt 版本，不能混用插件路径。
+渲染需要图形后端；本机已用 Wayland/OpenGL 验证，纯软件离屏后端不支持 3D。
+模块加载失败或 Host 检测到模型/贴图缺失时回退立绘；建议保留 `portraits.idle`。
+
+角色仍使用左下 layer-shell 面板和原有鼠标穿透，不修改 niri 普通窗口规则。
+口型完全由现有播放 PCM 投影驱动；停止后归零，UI 断连也立即闭嘴并停止眨眼/起伏。
+高频播放状态更新复用现有 3D 委托，不反复创建网格。全局语音设置页仍编辑默认服务，诊断检查当前选中角色的 TTS。
+
+七海千秋服务模板见 [voidmaker-tts-chiaki.service](systemd/voidmaker-tts-chiaki.service)，
+`~/.config/voidmaker/tts-chiaki.yaml` 的 `custom` 配置须设为 `version: v2ProPlus`，
+并将 `t2s_weights_path`、`vits_weights_path` 指向导入目录内 `voice/gpt.ckpt`、`voice/sovits.pth` 的绝对路径。
+BERT、CNHuBERT 路径使用独立 GPT-SoVITS 环境原有预训练文件；AMD 本机使用 `device: cuda`、`is_half: true`。
+新服务独占 `127.0.0.1:9881`，原默认服务继续使用 9880。
+
+安装后可在本机 `~/.config/systemd/user/voidmaker-host.service.d/30-chiaki-tts.conf` 添加
+`[Unit]` 下的 `Wants=voidmaker-tts-chiaki.service`，再执行 `systemctl --user daemon-reload`。
+这样七海服务随 Host 启动，无需让所有部署都安装该角色，也无需修改通用 Host 服务模板。

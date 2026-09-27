@@ -2,9 +2,14 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
-import { type CharacterSummary, characterDefinition } from "../../contracts/src/character.js";
+import {
+  type AvatarPresentation,
+  avatarManifest,
+  type CharacterSummary,
+  characterDefinition,
+} from "../../contracts/src/character.js";
 import type { VoiceConfig } from "../../contracts/src/voice.js";
 import type { Portraits } from "../../domain/src/character.js";
 
@@ -15,7 +20,8 @@ export type Character = Readonly<{
   revision: string;
   portraits: Portraits;
   layered: boolean;
-  voice?: Readonly<Omit<NonNullable<VoiceConfig["tts"]>, "url" | "timeoutMs">>;
+  avatar?: AvatarPresentation;
+  voice?: Readonly<Omit<NonNullable<VoiceConfig["tts"]>, "url" | "timeoutMs"> & { url?: string }>;
 }>;
 export type CharacterCatalog = Readonly<{ entries: readonly Character[]; warnings: readonly string[] }>;
 export const defaultCharacter: Character = {
@@ -26,8 +32,18 @@ export const defaultCharacter: Character = {
   portraits: {},
   layered: false,
 };
+export function characterTts(config: VoiceConfig["tts"], character: Character): VoiceConfig["tts"] {
+  const voice = character.voice;
+  if (voice?.url) return { ...voice, url: voice.url, timeoutMs: config?.timeoutMs ?? 120_000 };
+  return config ? { ...config, ...voice } : undefined;
+}
 export function characterSummary(value: Character): CharacterSummary {
-  return { id: value.id, name: value.name, hasPortrait: !!value.portraits.idle, hasVoice: !!value.voice };
+  return {
+    id: value.id,
+    name: value.name,
+    hasPortrait: !!value.portraits.idle || !!value.avatar,
+    hasVoice: !!value.voice,
+  };
 }
 async function boundedFile(path: string, limit: number): Promise<Buffer> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
@@ -102,6 +118,31 @@ export async function loadCharacters(
         }
       }
       let voice: Character["voice"];
+      let avatar: AvatarPresentation | undefined;
+      if (definition.avatar) {
+        try {
+          const manifestPath = await assetPath(root, definition.avatar.manifest);
+          const manifest = avatarManifest.parse(
+            JSON.parse((await boundedFile(manifestPath, 64 * 1024)).toString("utf8")),
+          );
+          const parts = await Promise.all(
+            manifest.parts.map(async (part) => {
+              const mesh = await assetPath(dirname(manifestPath), part.mesh);
+              const info = await stat(mesh);
+              if (!info.isFile() || info.size < 32 || info.size > 64 * 1024 * 1024) throw new Error("网格文件无效");
+              return {
+                meshUrl: pathToFileURL(mesh).href,
+                textureUrl: part.texture ? await portrait(dirname(manifestPath), part.texture) : "",
+                color: part.color,
+                doubleSided: part.doubleSided,
+              };
+            }),
+          );
+          avatar = { kind: "quick3d", height: manifest.height, centerY: manifest.centerY, parts };
+        } catch {
+          warnings.push(`${definition.name}：3D 素材不可用，使用立绘回退`);
+        }
+      }
       if (definition.voice) {
         const refAudioPath = await assetPath(root, definition.voice.reference);
         const info = await stat(refAudioPath);
@@ -111,6 +152,7 @@ export async function loadCharacters(
           promptText: definition.voice.promptText,
           promptLanguage: definition.voice.promptLanguage,
           textLanguage: definition.voice.textLanguage,
+          ...(definition.voice.url ? { url: definition.voice.url } : {}),
         };
       }
       entries.push({
@@ -120,6 +162,7 @@ export async function loadCharacters(
         layered: definition.portraits?.layered ?? false,
         revision: createHash("sha256").update(JSON.stringify(definition)).digest("hex"),
         portraits,
+        ...(avatar ? { avatar } : {}),
         ...(voice ? { voice } : {}),
       });
     } catch {

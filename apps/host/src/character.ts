@@ -32,7 +32,10 @@ export class CharacterController {
       characters: this.catalog.entries.map(characterSummary),
       changing: this.changing,
       warnings: this.catalog.warnings,
-      presentation: characterPresentation(this.current.portraits, voice, thinking, this.current.layered),
+      presentation: {
+        ...characterPresentation(this.current.portraits, voice, thinking, this.current.layered),
+        ...(this.current.avatar ? { avatar: this.current.avatar } : {}),
+      },
     };
   }
   select(id: string, session?: string | (() => Promise<string>)): Promise<void> {

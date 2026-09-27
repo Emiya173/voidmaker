@@ -26,6 +26,27 @@ function setup(overrides: Partial<VoicePorts> = {}, input = true, output = true)
 }
 
 describe("voice lifecycle", () => {
+  it("tracks role-specific speech availability and discards synthesis completed after stop", async () => {
+    let enabled = false;
+    const pending = deferred<Buffer>();
+    const { ports } = setup({ synthesize: () => pending.promise });
+    const voice = new VoiceController(ports, false, () => enabled);
+    expect(voice.snapshot.outputAvailable).toBe(false);
+    enabled = true;
+    expect(voice.snapshot.outputAvailable).toBe(true);
+    const speaking = voice.speak("你好。", voice.beginReply());
+    await vi.waitFor(() => expect(voice.snapshot.phase).toBe("synthesizing"));
+    const stopped = voice.cancel();
+    pending.resolve(wav);
+    await Promise.all([stopped, speaking]);
+    expect(ports.play).not.toHaveBeenCalled();
+    expect(voice.snapshot.phase).toBe("idle");
+    expect(voice.snapshot.level).toBe(0);
+    enabled = false;
+    await voice.speak("无语音角色。", voice.beginReply());
+    expect(ports.play).not.toHaveBeenCalled();
+    expect(voice.snapshot.outputAvailable).toBe(false);
+  });
   it("keeps a transcript editable until explicit submission", async () => {
     const { voice, ports } = setup();
     voice.listen();

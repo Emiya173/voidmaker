@@ -7,6 +7,12 @@ Item {
     required property var snapshot
     property bool online: true
     readonly property var presentation: snapshot ? snapshot.presentation : null
+    property var avatar: null
+    onPresentationChanged: {
+        const next = presentation && presentation.avatar ? presentation.avatar : null
+        // Playback projections arrive frequently; keep geometry delegates alive.
+        if (JSON.stringify(avatar) !== JSON.stringify(next)) avatar = next
+    }
     readonly property real mouth: online && presentation ? presentation.mouth : 0
     readonly property string stateLabel: !online ? "未连接" : !presentation ? "待命"
         : ({idle: "待命", listening: "正在聆听", thinking: "思考中", speaking: "说话中", error: "需要留意"})[presentation.state]
@@ -17,8 +23,21 @@ Item {
     Item {
         id: portrait
         anchors { left: parent.left; right: parent.right; top: parent.top; bottom: caption.top; bottomMargin: 10 }
+        Loader {
+            id: avatarLoader
+            anchors.fill: parent
+            active: !!view.avatar
+            // Load lazily so machines without Qt Quick 3D retain the portrait UI.
+            source: active ? "Character3D.qml" : ""
+            onLoaded: {
+                item.avatar = Qt.binding(() => view.avatar || ({height: 20, centerY: 10, parts: []}))
+                item.mouth = Qt.binding(() => view.mouth)
+                item.online = Qt.binding(() => view.online)
+            }
+        }
         Image {
             id: base
+            visible: avatarLoader.status !== Loader.Ready
             anchors.fill: parent
             source: view.presentation ? view.presentation.baseUrl : ""
             fillMode: Image.PreserveAspectFit
@@ -28,6 +47,7 @@ Item {
         }
         Image {
             id: frame
+            visible: avatarLoader.status !== Loader.Ready
             anchors.fill: parent
             source: view.presentation ? view.presentation.imageUrl : ""
             fillMode: Image.PreserveAspectFit
@@ -38,7 +58,7 @@ Item {
         Rectangle {
             anchors.centerIn: parent
             width: 144; height: 158; radius: 48
-            visible: base.status !== Image.Ready && frame.status !== Image.Ready
+            visible: avatarLoader.status !== Loader.Ready && base.status !== Image.Ready && frame.status !== Image.Ready
             color: "#25384a"
             border.color: view.presentation && view.presentation.state === "listening" ? "#97e5cc" : "#7397b5"
             border.width: 2

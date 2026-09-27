@@ -1,23 +1,19 @@
-# 角色包目录
+# 本地角色素材
 
-`<id>/character.json` + 立绘/语音资源,兼容 sakura 的角色包格式。
+本目录仅保留这份说明进入 Git。`.char`、导入后的角色目录、PMX、贴图、录音和权重均被忽略。
+运行时格式是 TypeScript 应用的 `character.json`，不加载旧 Python loader 或 `card.md`。
 
-- 从 [sakura Releases](https://github.com/Rvosy/sakura/releases) 下载 `.char` 后解压到本目录。
-- **角色内容不入 git**(立绘/语音为二创资产,版权不在 MIT 覆盖范围内),.gitignore 已排除。
-- 加载逻辑:`src/voidmaker/character/loader.py`;字段与 sakura 的
-  `app/config/character_loader.py` 对齐,拿到实际包后补全 schema。
+导入 Shinsekai 包：
 
-最小 character.json 示例:
-
-```json
-{
-  "id": "example",
-  "display_name": "示例角色",
-  "persona": "系统提示主体……",
-  "tones": ["中性", "开心"],
-  "portrait": {
-    "default": "portraits/default.png",
-    "expressions": { "开心": "portraits/happy.png" }
-  }
-}
+```sh
+nix develop
+pnpm character:import characters/七海千秋.char characters/chiaki chiaki http://127.0.0.1:9881/tts
 ```
+
+目标目录必须不存在。导入工具仅读取配置和素材，将第一张 WebP 立绘转成 PNG，
+提取 GPT/SoVITS 两份权重与参考音频，记录来源 SHA-256。其余表情仍可从原包中选配。
+权重由仓库外的 GPT-SoVITS 服务加载，Host 不执行角色包代码。
+
+Host 默认读取 `~/.local/share/voidmaker/characters`，本目录不会自动注册。
+完整配置、3D 转换与启动步骤见 [角色文档](../docs/CHARACTERS.md) 和
+[七海千秋接入记录](../docs/CHIAKI_CHARACTER_RESEARCH.md)。

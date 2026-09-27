@@ -1,0 +1,13 @@
+[Unit]
+Description=VoidMaker Chiaki GPT-SoVITS
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/gpt-sovits
+ExecStart=/run/current-system/sw/bin/nix develop --command .venv/bin/python api_v2.py -a 127.0.0.1 -p 9881 -c %h/.config/voidmaker/tts-chiaki.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

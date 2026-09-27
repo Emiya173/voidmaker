@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { CharacterController } from "../apps/host/src/character.js";
-import { defaultCharacter, loadCharacters } from "../packages/adapters/src/characters.js";
+import { characterTts, defaultCharacter, loadCharacters } from "../packages/adapters/src/characters.js";
 import { characterDefinition } from "../packages/contracts/src/character.js";
 import { characterPresentation } from "../packages/domain/src/character.js";
 import { initialVoice, voiceTransition } from "../packages/domain/src/voice.js";
@@ -88,6 +88,76 @@ it("drives mouth only from playback PCM, resets on stop and ignores late progres
     mouth: 0,
     subtitle: "",
   });
+});
+it("isolates character endpoints and never inherits the other model's health URL", () => {
+  const global = {
+    url: "http://127.0.0.1:9880/tts",
+    healthUrl: "http://127.0.0.1:9880/health",
+    refAudioPath: "/old.wav",
+    promptText: "old",
+    promptLanguage: "zh",
+    textLanguage: "auto",
+    timeoutMs: 120000,
+  };
+  const character = {
+    ...defaultCharacter,
+    voice: {
+      url: "http://127.0.0.1:9881/tts",
+      refAudioPath: "/chiaki.wav",
+      promptText: "test",
+      promptLanguage: "ja",
+      textLanguage: "auto",
+    },
+  };
+  expect(characterTts(global, character)).toEqual({ ...character.voice, timeoutMs: 120000 });
+  expect(characterTts(undefined, character)?.url).toBe(character.voice.url);
+  expect(characterTts(undefined, defaultCharacter)).toBeUndefined();
+  expect(
+    characterDefinition.safeParse({
+      version: 1,
+      id: "x",
+      name: "X",
+      persona: "X",
+      voice: {
+        reference: "ref.wav",
+        promptText: "test",
+        url: "https://example.com/tts",
+      },
+    }).success,
+  ).toBe(false);
+});
+it("falls back from missing or escaping 3D resources without losing the character", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "voidmaker-avatar-"));
+  paths.push(directory);
+  await mkdir(join(directory, "demo"));
+  await mkdir(join(directory, "demo", "avatar"));
+  await writeFile(
+    join(directory, "demo", "character.json"),
+    JSON.stringify({
+      version: 1,
+      id: "demo",
+      name: "Demo",
+      persona: "test",
+      avatar: { kind: "quick3d", manifest: "avatar/avatar.json" },
+    }),
+  );
+  await writeFile(
+    join(directory, "demo", "avatar", "avatar.json"),
+    JSON.stringify({
+      height: 20,
+      centerY: 10,
+      parts: [{ mesh: "absent.mesh", color: [1, 1, 1, 1] }],
+    }),
+  );
+  let catalog = await loadCharacters(directory);
+  expect(catalog.entries[1]?.id).toBe("demo");
+  expect(catalog.entries[1]?.avatar).toBeUndefined();
+  expect(catalog.warnings).toEqual(["Demo：3D 素材不可用，使用立绘回退"]);
+  await writeFile(join(directory, "outside.mesh"), Buffer.alloc(64));
+  await symlink(join(directory, "outside.mesh"), join(directory, "demo", "avatar", "absent.mesh"));
+  catalog = await loadCharacters(directory);
+  expect(catalog.entries[1]?.avatar).toBeUndefined();
+  expect(catalog.warnings).toHaveLength(1);
 });
 it("rejects concurrent/busy switches and retains the previous character on failure or late shutdown", async () => {
   const other = { ...defaultCharacter, id: "other", name: "Other" };

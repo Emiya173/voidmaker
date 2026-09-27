@@ -26,19 +26,27 @@ export class VoiceController {
   constructor(
     private readonly ports: VoicePorts,
     inputAvailable: boolean,
-    outputAvailable: boolean,
+    private readonly outputAvailable: boolean | (() => boolean),
     private readonly bargeIn = false,
   ) {
-    this.state = initialVoice(inputAvailable, outputAvailable, bargeIn, !!ports.openSession);
+    this.state = initialVoice(
+      inputAvailable,
+      typeof outputAvailable === "function" ? outputAvailable() : outputAvailable,
+      bargeIn,
+      !!ports.openSession,
+    );
   }
   get snapshot(): VoiceSnapshot {
-    return this.state;
+    return {
+      ...this.state,
+      outputAvailable: typeof this.outputAvailable === "function" ? this.outputAvailable() : this.outputAvailable,
+    };
   }
   private dispatch(event: VoiceEvent): void {
     const next = voiceTransition(this.state, event);
     if (next !== this.state) {
       this.state = next;
-      this.ports.publish(next);
+      this.ports.publish(this.snapshot);
     }
   }
   private current(generation: number): boolean {
@@ -135,7 +143,7 @@ export class VoiceController {
   }
   private async speakTurn(text: string, generation: number): Promise<void> {
     try {
-      if (this.state.outputAvailable) {
+      if (this.snapshot.outputAvailable) {
         const signal = this.controller.signal;
         for (const segment of speechSegments(text)) {
           if (!this.current(generation)) return;

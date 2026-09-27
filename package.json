@@ -16,7 +16,9 @@
     "work:smoke": "tsx apps/tools/src/work-smoke.ts",
     "aec:smoke": "tsx apps/tools/src/aec-smoke.ts",
     "aec:replay": "tsx apps/tools/src/aec-replay.ts",
-    "aec:session-smoke": "tsx apps/tools/src/aec-session-smoke.ts"
+    "aec:session-smoke": "tsx apps/tools/src/aec-session-smoke.ts",
+    "character:import": "tsx apps/tools/src/character-import.ts",
+    "character:pmx": "tsx apps/tools/src/character-convert-pmx.ts"
   },
   "dependencies": {
     "dbus-next": "0.10.2",
@@ -28,8 +30,11 @@
     "@biomejs/biome": "^2.0.0",
     "@types/node": "^22.0.0",
     "@types/pg": "^8.15.0",
+    "fflate": "^0.8.3",
+    "mmd-parser": "^1.0.4",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
-    "vitest": "^3.2.0"
+    "vitest": "^3.2.0",
+    "yaml": "^2.9.1"
   }
 }
