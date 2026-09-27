@@ -44,6 +44,28 @@ ARP 姿势由 Blender 离线求值。对最终网格烘焙身体、手指、脸�
 
 `--pose-references 文件.json` 接受 `{ "yawn": "立绘路径", "think": "立绘路径", "greet": "立绘路径" }`，选择动作时同步切换参考图。路径可以是绝对路径或相对该 JSON 的路径；常态仍显示 `--reference` 指定的立绘。截图日志同时记录实际关节位置和八个形态键权重。
 
+比较姿势修正时加 `--sync-poses`，前后模型会使用同一个完整姿势、诊断权重和切换淡出/淡入；基准仍关闭自动待机。默认不加该参数时，基准继续保持原来的中性站姿。`yawn-detail,think-detail,greet-detail` 放大手部与口部，均使用完整姿势权重，适合检查同姿势修正前后。示例：
+
+```bash
+pnpm character:inspect before/avatar.json after/avatar.json --portrait --sync-poses \
+  --frames yawn-detail,think-detail,greet-detail --capture new-comparison-directory
+```
+
+垂下手使用 `yawn-hand,think-hand,greet-hand`：从掌侧观察，保留袖口至全部指尖，避免正面视角把手指叠成一条线。主动手另有 `think-fingers,greet-fingers` 侧向近景，可检查食指弯曲、指尖与下巴的距离，以及拇指相对掌面的方向。全部使用完整姿势权重，取景参数如下：
+
+| 机位 | yaw | zoom | targetY |
+| --- | ---: | ---: | ---: |
+| yawn-hand / think-hand | -65° | 4 | -0.03 |
+| greet-hand | 65° | 4 | -0.03 |
+| think-fingers | -75° | 4 | 0.32 |
+| greet-fingers | 75° | 4 | 0.36 |
+
+```bash
+pnpm character:inspect before/avatar.json after/avatar.json --portrait --sync-poses \
+  --frames yawn-hand,think-hand,greet-hand,think-fingers,greet-fingers \
+  --capture new-hand-comparison-directory
+```
+
 自动待机在视图或所属窗口隐藏、断连时停止并恢复关节中性状态，换角色会从零重新计时。离线保留作者定义的常态眼睑外观。旧网格保留自动眨眼，不再使用整个模型上下平移模拟呼吸。
 
 验证命令：

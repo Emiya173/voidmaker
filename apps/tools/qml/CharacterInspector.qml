@@ -25,6 +25,7 @@ ShellRoot {
     property real poseWeight: 1
     property string displayedPose: "neutral"
     property real poseOpacity: 1
+    readonly property bool syncPoses: !!(preview && preview.syncPoses)
     readonly property string referenceSource: preview
         ? (preview.poseReferences && preview.poseReferences[displayedPose]) || preview.reference : ""
     onSelectedPoseChanged: {
@@ -190,6 +191,10 @@ ShellRoot {
                                 y: 45
                                 avatar: root.avatar("before")
                                 automaticMotion: false
+                                opacity: root.syncPoses ? root.poseOpacity : 1
+                                yawn: root.syncPoses && root.displayedPose === "yawn" ? root.poseWeight : 0
+                                think: root.syncPoses && root.displayedPose === "think" ? root.poseWeight : 0
+                                greet: root.syncPoses && root.displayedPose === "greet" ? root.poseWeight : 0
                                 windowVisible: window.visible
                                 online: root.online
                                 viewYaw: root.yaw; viewPitch: root.pitch

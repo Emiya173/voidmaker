@@ -15,6 +15,7 @@ const { positionals, values } = parseArgs({
     "pose-references": { type: "string" },
     capture: { type: "string" },
     portrait: { type: "boolean", default: false },
+    "sync-poses": { type: "boolean", default: false },
     frames: { type: "string" },
     "before-label": { type: "string", default: "基准" },
     "after-label": { type: "string", default: "候选" },
@@ -23,7 +24,7 @@ const { positionals, values } = parseArgs({
 const [before, after] = positionals;
 if (!before || !after || positionals.length !== 2)
   throw new Error(
-    "用法：pnpm character:inspect <之前/avatar.json> <之后/avatar.json> [--reference 立绘.png] [--pose-references 姿势立绘.json] [--capture 新目录] [--portrait] [--frames head,torso,desktop] [--before-label 基准] [--after-label 候选]",
+    "用法：pnpm character:inspect <之前/avatar.json> <之后/avatar.json> [--reference 立绘.png] [--pose-references 姿势立绘.json] [--capture 新目录] [--portrait] [--sync-poses] [--frames head,torso,desktop] [--before-label 基准] [--after-label 候选]",
   );
 const frames = values.frames
   ? values.frames.split(",").map((name) => {
@@ -60,6 +61,7 @@ const preview = {
   poseReferences,
   capture: values.capture ? resolve(values.capture) : "",
   portrait: values.portrait,
+  syncPoses: values["sync-poses"],
   frames,
   beforeLabel: values["before-label"],
   afterLabel: values["after-label"],
