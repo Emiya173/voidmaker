@@ -1,5 +1,10 @@
 // An original three-vertex PMX fixture, independent of downloaded character assets.
-export function trianglePmx(badIndex = false, restEyes = false, idle = false) {
+export function trianglePmx(
+  badIndex = false,
+  restEyes = false,
+  idle = false,
+  skin?: readonly Readonly<{ bones: readonly number[]; weights: readonly number[] }>[],
+) {
   const chunks: Buffer[] = [];
   const byte = (...v: number[]) => {
     chunks.push(Buffer.from(v));
@@ -32,7 +37,13 @@ export function trianglePmx(badIndex = false, restEyes = false, idle = false) {
     [1, 11, 0],
   ].entries()) {
     float(...pos, 0, 0, -1, 0, 0);
-    byte(0, idle ? i + 5 : 1);
+    const binding = skin?.[i];
+    if (binding) {
+      if (binding.bones.length !== 4 || binding.weights.length !== 4)
+        throw new Error("BDEF4 fixture requires four influences");
+      byte(2, ...binding.bones);
+      float(...binding.weights);
+    } else byte(0, idle ? i + 5 : 1);
     float(i / 2);
   }
   uint(3);

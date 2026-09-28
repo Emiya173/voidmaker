@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { open, readdir, realpath, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   type AvatarPresentation,
@@ -12,6 +11,8 @@ import {
 } from "../../contracts/src/character.js";
 import type { VoiceConfig } from "../../contracts/src/voice.js";
 import type { Portraits } from "../../domain/src/character.js";
+import { assetPath, boundedFile } from "./character-assets.js";
+import { readMotionRig } from "./character-motion.js";
 
 export type Character = Readonly<{
   id: string;
@@ -44,30 +45,6 @@ export function characterSummary(value: Character): CharacterSummary {
     hasPortrait: !!value.portraits.idle || !!value.avatar,
     hasVoice: !!value.voice,
   };
-}
-async function boundedFile(path: string, limit: number): Promise<Buffer> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
-  try {
-    const info = await handle.stat();
-    if (!info.isFile() || info.size > limit) throw new Error("文件类型或大小无效");
-    const bytes = Buffer.alloc(limit + 1);
-    let offset = 0;
-    while (offset < bytes.length) {
-      const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, null);
-      if (!bytesRead) break;
-      offset += bytesRead;
-    }
-    if (offset > limit) throw new Error("文件过大");
-    return bytes.subarray(0, offset);
-  } finally {
-    await handle.close();
-  }
-}
-async function assetPath(root: string, path: string): Promise<string> {
-  const resolved = await realpath(join(root, path));
-  const rel = relative(root, resolved);
-  if (!rel || rel === ".." || rel.startsWith("../") || isAbsolute(rel)) throw new Error("素材越出角色目录");
-  return resolved;
 }
 async function portrait(root: string, path: string): Promise<string> {
   const resolved = await assetPath(root, path);
@@ -161,6 +138,9 @@ export async function loadCharacters(
             framing: manifest.framing,
             ...(manifest.restEyes === undefined ? {} : { restEyes: manifest.restEyes }),
             ...(manifest.idleRig ? { idleRig: manifest.idleRig } : {}),
+            ...(manifest.motionRig
+              ? { motionRig: await readMotionRig(dirname(manifestPath), manifest.motionRig, manifest.poses ?? []) }
+              : {}),
             ...(manifest.expressions ? { expressions: manifest.expressions } : {}),
             ...(manifest.poses ? { poses: manifest.poses } : {}),
             parts,

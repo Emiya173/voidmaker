@@ -10,15 +10,25 @@ View3D {
     // Supplied by the containing panel/window; proxy windows are not ordinary
     // QQuickWindow parents, so Item.visible alone cannot report panel hiding.
     property bool windowVisible: true
+    property string action: ""
+    property int actionSerial: 0
+    property bool automaticAction: true
+    property real actionSeconds: 0
+    property bool actionPaused: false
+    readonly property bool skeletal: !!avatar.motionRig
+    readonly property real actionTime: actionSkeleton.time
+    readonly property real actionDuration: actionSkeleton.duration
+    readonly property bool actionPlaying: actionSkeleton.playing
+    readonly property bool actionReady: actionSkeleton.ready
     property real blink: 0
     property real sleepy: 0
     property real smile: 0
     property real yawn: 0
     property real think: 0
     property real greet: 0
-    readonly property real yawnWeight: (avatar.poses || []).indexOf("yawn") >= 0 ? Math.max(0, yawn) : 0
-    readonly property real thinkWeight: (avatar.poses || []).indexOf("think") >= 0 ? Math.max(0, think) : 0
-    readonly property real greetWeight: (avatar.poses || []).indexOf("greet") >= 0 ? Math.max(0, greet) : 0
+    readonly property real yawnWeight: skeletal ? (actionSkeleton.actionName === "yawn" ? actionSkeleton.expressionWeight : 0) : (avatar.poses || []).indexOf("yawn") >= 0 ? Math.max(0, yawn) : 0
+    readonly property real thinkWeight: skeletal ? (actionSkeleton.actionName === "think" ? actionSkeleton.expressionWeight : 0) : (avatar.poses || []).indexOf("think") >= 0 ? Math.max(0, think) : 0
+    readonly property real greetWeight: skeletal ? (actionSkeleton.actionName === "greet" ? actionSkeleton.expressionWeight : 0) : (avatar.poses || []).indexOf("greet") >= 0 ? Math.max(0, greet) : 0
     readonly property real poseTotal: yawnWeight + thinkWeight + greetWeight
     readonly property real poseScale: motionActive ? 1 / Math.max(1, poseTotal) : 0
     readonly property real idleStrength: 1 - Math.min(1, poseTotal) * (motionActive ? 1 : 0)
@@ -57,6 +67,7 @@ View3D {
             blink: effectiveBlink,
             poseScale: poseScale,
             idleStrength: idleStrength,
+            action: actionSkeleton.snapshot(),
             weights: parts.count ? parts.objectAt(0).faceTargets.map(target => target.weight) : []
         }
     }
@@ -73,6 +84,8 @@ View3D {
     property int diagnosticMode: 0
     property real viewYaw: framing.yaw
     property real viewPitch: 0
+    // Inspector camera offset, in fractions of the normalized character height.
+    property real viewTargetX: 0
     readonly property var framing: avatar.framing || ({yaw: 0, zoom: 1, targetY: 0})
     readonly property real modelScale: 20 / avatar.height
     readonly property real yawRadians: viewYaw * Math.PI / 180
@@ -90,6 +103,7 @@ View3D {
         }
     }
     camera: OrthographicCamera {
+        x: scene.viewTargetX * 20
         z: 60
         y: scene.framing.targetY * 20
         clipNear: 0.1
@@ -107,6 +121,16 @@ View3D {
             scale: Qt.vector3d(scene.modelScale, scene.modelScale, scene.modelScale)
             x: -(scene.avatar.centerX || 0) * scene.modelScale
             y: -scene.avatar.centerY * scene.modelScale
+            CharacterSkeleton {
+                id: actionSkeleton
+                rig: scene.avatar.motionRig || null
+                active: scene.motionActive
+                action: scene.action
+                actionSerial: scene.actionSerial
+                automaticAction: scene.automaticAction
+                actionSeconds: scene.actionSeconds
+                actionPaused: scene.actionPaused
+            }
             Node {
                 id: rootJoint
                 position: scene.jointPosition(0, -1)
@@ -198,7 +222,7 @@ View3D {
                         source: modelData.meshUrl
                         materials: CharacterMaterial { part: part.modelData; diagnosticMode: scene.diagnosticMode }
                         morphTargets: part.faceTargets
-                        skin: scene.rigged ? idleSkin : null
+                        skin: scene.skeletal ? actionSkeleton.skin : scene.rigged ? idleSkin : null
                     }
                     Model {
                         visible: scene.outlinesEnabled && scene.diagnosticMode === 0 && !!modelData.toon && modelData.toon.edgeSize > 0 && modelData.color[3] >= 1 && modelData.toon.edgeColor[3] > 0
@@ -215,7 +239,7 @@ View3D {
                             fragmentShader: "shaders/character-outline.frag"
                         }
                         morphTargets: part.faceTargets
-                        skin: scene.rigged ? idleSkin : null
+                        skin: scene.skeletal ? actionSkeleton.skin : scene.rigged ? idleSkin : null
                     }
                 }
             }

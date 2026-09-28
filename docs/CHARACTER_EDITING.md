@@ -2,8 +2,9 @@
 
 本流程把几何编辑与 Qt 材质分开：Blender 编辑顶点、UV、自定义法线和顶点表情；
 Qt 继续使用原 PMX 的 Toon、描边、透明度与 `look.json` 外观配置。
-`.blend` 保留原骨骼和完整表情，运行时仍只使用静态站姿、口型、眨眼和可选常态眼睑。
-这是保留拓扑的局部修模流程，不包含重拓扑、MMD 物理、MME 节点或骨骼动画转换。
+`.blend` 保留原骨骼和完整表情；局部修模默认导出静态站姿、口型、眨眼和可选常态眼睑。
+下述往返流程保留拓扑，不包含重拓扑、MMD 物理或 MME 节点。
+连续骨骼动作使用本文后面的独立离线导出流程，不通过静态形态键模拟抬臂。
 
 ## 建立零修改基准
 
@@ -155,7 +156,7 @@ ARP 的 Human 模板按原模型关节位置拟合并执行 Match to Rig；生�
 在临时导出副本上移除骨架修改器并归零表情。控制器、当前摆姿和动画不会烘焙进导出结果，源 `.blend` 不会被保存。
 缺少快照、重复角色网格或未应用几何修改器仍拒绝导出；被排除的网格记录在工具链报告中。
 动画导出需要另行烘焙到原蒙皮骨架并验证目标端，不能把控制骨架直接当作已绑定 ARP 蒙皮骨架导出。
-本轮未改运行时资源，也未接入 Qt 骨骼动画。重新生成 ARP 或修改参考骨骼后，需要重新验证连接矩阵。
+上述绑定阶段未接入 Qt 骨骼动画。重新生成 ARP 或修改参考骨骼后，需要重新验证连接矩阵。
 
 ## 从 ARP 基准继续造型
 
@@ -195,6 +196,153 @@ Qt 对照使用同一套已认可的材质与纹理，当前产物为 `qt-base/`
 不改写导入快照来掩盖误差。此编码操作限定于当前固定 Blender 版本的本地修模脚本。
 位置、UV、morph 容差分别为 `1e-5`、`1e-6`、`1e-5`；法线单位向量分量容差 `5e-4`。
 不会把 Blender 的完整材质、灯光、物理和骨架行为转换到 Qt。
+
+## 连续骨骼动作导出与检查
+
+完整动作候选使用 `motionRig`，与六关节待机 `idleRig` 互斥；外观配置也不能同时启用
+`motionRig` 和 `idleMotion`。当前支持哈欠（`yawn`）、思考（`think`）、远望（`greet`）三个片段。
+`greet` 是早期误读动作时留下的资源 ID，为兼容现有文件而保留；检查台按“远望”显示，不表示致意。
+ARP、约束和 IK 在 Blender 中离线求值，Qt 接收蒙皮骨骼的局部位移与四元数轨道，
+正文和描边共用完整 Skin。此流程没有 VMD 导入、物理模拟、运行时 IK 或 Host 自动动作调度。
+
+### 保留原始绑定
+
+动作网格保留原 PMX 静止姿态和原权重；逆绑定矩阵来自原始蒙皮骨架，
+骨架清单中的局部位移和旋转则定义作者的中性站姿。中性站姿也由同一 Skin 求值，
+不能先烘焙 `relaxed` 网格、再套用原始逆绑定矩阵。带 `motionRig` 的转换必须使用
+`--pose original`；转换器会拒绝重复烘焙的 `relaxed` 输入。
+
+使用与最终 `.blend`、PMX 完全对应的 `vertex-map.json`，同目录需有 PMX 导出的
+`export-report.json`。映射中的 `vertexIndex` 和 `loopIndex` 分别对应 Blender 顶点与角点，
+支持 UV/法线边界拆出的 PMX 顶点。导出前检查 blend/PMX 指纹、Basis 坐标、映射和修改器，
+不能把较早版本的映射用于新拓扑。该工具不生成这份映射，也不代替局部修模的 PMX 导出。
+
+### 可信本地动作配方
+
+在角色资产目录编写本地 Python 配方，通过 `--author` 显式传给
+`apps/tools/blender/character_motion.py`。配方是会执行的 Python 代码，必须使用自己审阅过的本地文件；
+`--disable-autoexec` 只禁止工程内的自动脚本，不会禁止这个显式导入的配方。
+配方与角色资产均不入 Git。下表是通用导出器的接口，其 `expression` 阶段仍只导出脸部目标；
+可选衣料修正由后续本地资产构建步骤追加，见下文“局部衣料姿态修正”。
+
+| 接口 | 责任 |
+| --- | --- |
+| `CLIPS` | `{ "yawn": 秒数, "think": 秒数, "greet": 秒数 }`，可提供其中一部分，时长为正且不超过 60 秒 |
+| `Author(mesh, rig, source)` | 接收角色网格对象、ARP 控制骨架、原蒙皮骨架；可准备本地控制状态，不改已有形态键坐标 |
+| `neutral()` | 恢复固定中性姿态和中性脸部；重复调用应得到同一结果 |
+| `sample(name, seconds)` | 独立求出指定时间的骨姿，返回该动作脸部目标的权重 `0..1`；不能依赖前一次采样状态 |
+| `expression(name)` | 恢复原始绑定状态，仅应用脸部目标；应将原蒙皮骨架设为 `REST`，不得把手臂或身体骨姿烘入脸部文件 |
+
+每个动作从中性进入、停留后收回中性，首尾骨姿和脸部权重必须一致。手腕路径、肘部弯曲方向、
+屈指时序和袖口穿插由配方负责，导出器不会替作者自动修正。大幅动作应先检查进入和收回，
+不能只确认停留帧。原蒙皮必须使用线性蒙皮；骨骼缩放、剪切和保体积双四元数蒙皮不在此格式内。
+
+```sh
+nix develop .#character
+blender --background --factory-startup --disable-autoexec --python-exit-code 1 \
+  --python apps/tools/blender/character_motion.py -- \
+  --blend /path/to/final.blend \
+  --pmx /path/to/exchange/model.pmx \
+  --map /path/to/exchange/vertex-map.json \
+  --author /path/to/local-author.py \
+  --rig ARP控制骨架对象名 --source 原蒙皮骨架对象名 \
+  --fps 30 --output /path/to/new-motion-export
+```
+
+默认骨架对象名为 `Chiaki_ARP` 与 `nanami_ver1.0.1_arm`，其他模型应显式指定。
+该环境提供固定 MMD Tools；ARP 插件须已安装且能在此 Blender 中加载。
+输出目录及同名 `.partial` 暂存目录必须不存在。采样率可设 `10..60` FPS；导出器最终保存
+`rig.json`、各动作 JSON、`face-yawn.json` 等脸部目标，以及输入哈希、采样数量和最大相邻骨旋转步长报告。
+成功后才把暂存目录改为目标目录，失败留下暂存证据；源工程不保存，已有形态键坐标和输入文件需保持不变。
+
+`rig.json` 保存父节点在前的骨架和原始逆绑定矩阵，最多 256 个关节。动画四元数按 Qt 的
+`[w,x,y,z]` 顺序保存，坐标为 Blender `(x,y,z)` → Qt `(x,z,-y)`。
+通用导出器生成的脸部文件是原始绑定坐标内的绝对位置与法线，通过 `look.poses` 接入三个现有槽。
+这些初始文件只包含脸部变化；后续可以追加经过范围校验的局部衣料修正。
+不能引用旧的全身静态姿势文件，否则会把抬臂变形叠加两次。
+
+外观配置中的路径相对配置文件，例如：
+
+```json
+{
+  "motionRig": "motion-export/rig.json",
+  "poses": {
+    "yawn": "motion-export/face-yawn.json",
+    "think": "motion-export/face-think.json",
+    "greet": "motion-export/face-greet.json"
+  }
+}
+```
+
+保留候选原有纹理、材质与表情配置，删除 `idleMotion` 后，用
+`pnpm character:pmx /path/to/model.pmx /path/to/new-qt-candidate --pose original --look /path/to/look.json`
+转换。转换器验证源 PMX 指纹、骨骼名称、轨道时长、首尾中性状态和资源路径，
+复制数字动作资源到候选目录；加载端将清单路径转成运行时的 `motionRig` 对象。
+
+### 局部衣料姿态修正
+
+已确定的骨骼动作可以保留，通过绑定空间的局部差分修正衣料。例如，内袖修正可追加到
+既有 `think` 目标，形成“脸部 + 局部衣料”的目标。该目标使用原思考片段的 `expression`
+曲线驱动，`POSITION` 与 `NORMAL` 在蒙皮前共同参与形态求值；动作进入、收回仍使用原骨骼轨道。
+这复用了已有形态槽，不增加应用协议或运行时接口，也不把身体骨姿改为线性顶点插值。
+
+本地构建步骤应遵循以下数据边界：
+
+1. 局部差分记录源网格名称、源工程指纹、材质范围、Blender 源 `vertexIndex`、绑定位置及差分。
+   用同版 `vertex-map.json` 的 `vertexIndex` 展开到所有对应 PMX 拆点，并用 `loopIndex`
+   取得相应角点法线。坐标统一转换为 Qt `(x,z,-y)`；源顶点编号不能直接当作 PMX 顶点编号。
+2. 从原脸部目标开始叠加衣料修正，生成完整 PMX 顶点顺序的绝对 `positions`、`normals`
+   和对应 `sourceSha256`。脸部目标、未修改衣料和其他材质的目标值须保持；修改邻域的法线也需重新烘焙，
+   不能只修改位置或沿用该区域未变形的原法线。
+3. 从绝对目标减去原始绑定网格的基础位置和法线，更新共享 `think` accessor 的两个差分通道。
+   当前内袖实验只允许上着 `part_8` 独占引用的顶点发生变化；其他材质共享的点须拒绝或另行明确范围。
+   同步目标位置边界，验证基础位置、UV、三角形、绑定矩阵、权重及其他形态槽均未改动。
+4. 如需经 Balsam 重导，只取回上着 `part_8` 网格，保留其他部件的原始网格字节。
+   核对关节顺序、蒙皮属性和形态槽，骨架资源与全部动作片段保持不变；正文与描边继续共用同一目标及 Skin。
+
+构建使用新目录与 `.partial` 暂存目录，成功校验后才更名。报告记录输入指纹、源点到 PMX 拆点的范围、
+目标差分及保留文件的哈希，并把相关目标语义标为 `face + local clothing corrective in bind space`，
+不能继续把经过追加的目标标成 `face-only`。本地修正脚本、清单和角色资源均不入 Git，
+通用导出器仍保留原来的仅脸部导出行为。
+
+该方法需要独立验证原动作全程：进入、停留、早段收回、晚段收回与中性复位，
+并在正面和侧面检查袖口外形、厚度、内外层穿插和描边。几何检查与 Qt 同时间对照分别记录；
+本节描述构建方法，不表示当前实验候选已完成几何复验或视觉验收。
+
+### Inspector 播放与确定性机位
+
+检查台识别带 `motionRig` 的候选后显示动作选择、播放、暂停、停止、重播和时间滑块。
+打开检查台或选择动作不会自动播放；拖动时间暂停在指定位置，播放从该位置继续，停止恢复中性。
+时长从候选清单读取。隐藏、断连或换资产会取消当前动作，恢复显示后需显式重播。
+旧的静态姿势与诊断权重控件在骨骼候选中隐藏，避免把 `*-half` 误认为骨骼动作半程。
+
+每个片段新增 `*-enter`、`*-hold`、`*-return`、`*-end`，分别采样完整时长的
+16%、50%、86%、100%；最后一帧应回到中性。`*-hold-side` 在 50% 处检查掌指与袖口侧面，
+yawn/think 为 -45°，greet 为 45°。这些阶段比例是检查点，动作的实际进入/停留时序仍由配方定义。
+正面阶段机位使用 `zoom: 1.55`、`targetY: 0.21`，为完整抬臂路径预留横向宽度；
+验收时必须确认进入与收回阶段的指尖和袖口都在画面内，不能只按停留姿态取景。
+截图以手动秒数采样，等待片段就绪后保存，不依赖截图时的墙钟时间。
+
+```sh
+pnpm character:inspect /path/to/old-motion-candidate/avatar.json \
+  /path/to/new-qt-candidate/avatar.json --portrait --sync-poses \
+  --pose-references /path/to/pose-references.json \
+  --frames yawn-enter,yawn-hold,yawn-return,yawn-end,yawn-hold-side,think-hold,think-hold-side,greet-hold,greet-hold-side \
+  --capture /path/to/new-action-captures
+```
+
+使用 `--sync-poses` 且两侧都有 `motionRig` 时，前后使用同名动作和同一绝对秒数，
+由候选单一时钟驱动；拖动、播放、暂停和重播同步，截图等待两侧片段就绪。
+若两版时长不同，基准到达自己的结尾后保持末帧，不按各自时长百分比重新映射。
+比较动作修改应使用这一模式，避免把旧静态姿势当成旧动画。基准为旧静态模型时，
+仍显示同名完整静态姿态作为造型参考，后侧使用骨骼片段，不叠加旧全身 pose morph。
+不加此选项时前侧保持中性。骨骼候选的默认截图集保留 head、talk、desktop 等机位，
+跳过旧静态姿态机位；显式请求旧的 `think-half` 等机位会提示改用 `think-hold`。
+不含 `motionRig` 的旧候选仍使用原机位与淡出/换姿/淡入行为。
+
+日志中的 `CHARACTER_INSPECTION_STATE.action` 记录片段、时间、时长、就绪和播放状态，
+`before.action`、`after.action` 记录两侧实际采样时间、关节和脸部权重。离屏生命周期测试验证控制与采样，
+实际 Qt 图仍需逐一检查手腕、手指、袖口、身体穿插及动作回收；工具通过不等于角色动作已验收。
 
 ## 回归
 

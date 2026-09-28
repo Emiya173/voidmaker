@@ -26,14 +26,15 @@ if (!before || !after || positionals.length !== 2)
   throw new Error(
     "用法：pnpm character:inspect <之前/avatar.json> <之后/avatar.json> [--reference 立绘.png] [--pose-references 姿势立绘.json] [--capture 新目录] [--portrait] [--sync-poses] [--frames head,torso,desktop] [--before-label 基准] [--after-label 候选]",
   );
-const frames = values.frames
+const requestedFrames = values.frames
   ? values.frames.split(",").map((name) => {
       const frame = inspectionFrames.find((frame) => frame.name === name);
       if (!frame) throw new Error(`未知检查机位：${name}`);
       return frame;
     })
   : inspectionFrames;
-if (new Set(frames.map((frame) => frame.name)).size !== frames.length) throw new Error("检查机位不能重复");
+if (new Set(requestedFrames.map((frame) => frame.name)).size !== requestedFrames.length)
+  throw new Error("检查机位不能重复");
 const poseReferenceFile = values["pose-references"];
 if (poseReferenceFile && (await stat(poseReferenceFile)).size > 64 * 1024) throw new Error("姿势立绘清单过大");
 const poseReferencePaths = poseReferenceFile
@@ -54,9 +55,21 @@ const poseReferences = Object.fromEntries(
     }),
   ),
 );
+const [beforePreview, afterPreview] = await Promise.all([readPreview(resolve(before)), readPreview(resolve(after))]);
+const frames = requestedFrames.filter((frame) => {
+  if (afterPreview.motionRig && "pose" in frame && !("action" in frame)) {
+    if (values.frames) throw new Error(`骨骼动作候选不使用静态姿态机位 ${frame.name}，请改用 ${frame.pose}-hold`);
+    return false;
+  }
+  if (!("action" in frame)) return true;
+  const available = afterPreview.motionRig?.clips.some((clip) => clip.name === frame.action);
+  if (!available && values.frames) throw new Error(`候选没有骨骼动作：${frame.action}（机位 ${frame.name}）`);
+  // Existing manifests retain their original default capture set.
+  return available;
+});
 const preview = {
-  before: await readPreview(resolve(before)),
-  after: await readPreview(resolve(after)),
+  before: beforePreview,
+  after: afterPreview,
   reference: values.reference ? pathToFileURL(await realpath(values.reference)).href : "",
   poseReferences,
   capture: values.capture ? resolve(values.capture) : "",

@@ -1,8 +1,9 @@
 import { z } from "zod";
+import type { AvatarMotionRig } from "./character-motion.js";
 import { localUrl } from "./voice.js";
 
 export const characterId = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/);
-const asset = z
+export const characterAssetPath = z
   .string()
   .min(1)
   .max(512)
@@ -10,6 +11,7 @@ const asset = z
     (path) => !path.startsWith("/") && !path.includes("\\") && !path.split("/").some((part) => part === ".." || !part),
     "素材须为角色目录内的相对路径",
   );
+const asset = characterAssetPath;
 const color = z.tuple([
   z.number().min(0).max(1),
   z.number().min(0).max(1),
@@ -119,10 +121,13 @@ export const avatarLook = z
       .optional(),
     // Opt-in six-joint presentation skinning, derived from original PMX weights.
     idleMotion: z.boolean().optional(),
+    // Full skeleton/clip resources for offline conversion, relative to this look.
+    motionRig: asset.optional(),
     expressions: z.object({ sleepy: expressionMix.optional(), smile: expressionMix.optional() }).strict().optional(),
     poses: z.object({ yawn: asset.optional(), think: asset.optional(), greet: asset.optional() }).strict().optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => !value.motionRig || !value.idleMotion, "完整动作骨架不能与六关节待机转换同时启用");
 export type AvatarLook = z.infer<typeof avatarLook>;
 const toon = z
   .object({
@@ -161,6 +166,7 @@ export const avatarManifest = z
     // If present, mesh morph slot 2 contains a neutral eyelid adjustment.
     restEyes: z.number().min(0).max(0.6).optional(),
     idleRig: avatarIdleRig.optional(),
+    motionRig: asset.optional(),
     expressions: expressionNames.optional(),
     poses: z
       .array(z.enum(["yawn", "think", "greet"]))
@@ -183,7 +189,8 @@ export const avatarManifest = z
       .min(1)
       .max(128),
   })
-  .strict();
+  .strict()
+  .refine((value) => !value.idleRig || !value.motionRig, "完整动作骨架不能与六关节待机骨架同时存在");
 export type AvatarPresentation = Readonly<{
   kind: "quick3d";
   height: number;
@@ -194,6 +201,7 @@ export type AvatarPresentation = Readonly<{
   framing?: Readonly<z.infer<typeof framing>>;
   restEyes?: number;
   idleRig?: Readonly<AvatarIdleRig>;
+  motionRig?: AvatarMotionRig;
   expressions?: readonly ("sleepy" | "smile")[];
   poses?: readonly ("yawn" | "think" | "greet")[];
   parts: readonly Readonly<{

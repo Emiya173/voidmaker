@@ -9,6 +9,7 @@ import { type AvatarLook, avatarLook, avatarManifest } from "../../../../package
 import { applyBlenderGeometry, auditBlenderGeometry } from "./blender-audit.js";
 import { readBlenderGeometry } from "./blender-gltf.js";
 import { createIdleRig } from "./pmx-idle.js";
+import { prepareMotionRig } from "./pmx-motion.js";
 import { createPose, type PmxPose } from "./pmx-pose.js";
 import { sculptVertex } from "./pmx-sculpt.js";
 
@@ -177,6 +178,12 @@ async function convertPmxFiles(
   }
   const posed = createPose(pmx.vertices, pmx.bones, pose);
   const idle = look.idleMotion ? createIdleRig(pmx.vertices, pmx.bones) : undefined;
+  if (look.motionRig && pose !== "original")
+    throw new Error("骨骼动作必须使用 original 绑定网格，不能重复烘焙 relaxed 站姿");
+  const motion = look.motionRig
+    ? await prepareMotionRig(pmx, sourceSha256, lookDirectory, look.motionRig, output)
+    : undefined;
+  const binding = motion ?? idle;
   const owners = new Map<number, string>();
   let materialOffset = 0;
   for (const material of pmx.materials) {
@@ -265,21 +272,22 @@ async function convertPmxFiles(
     sculpted.flatMap((v) => [v.edgeRatio, 0]),
     "VEC2",
   );
-  const skinAttributes = idle
+  const skinAttributes = binding
     ? {
         JOINTS_0: accessor(
-          idle.skin.flatMap((v) => v.joints),
+          binding.skin.flatMap((v) => v.joints),
           "VEC4",
           "joints",
         ),
         WEIGHTS_0: accessor(
-          idle.skin.flatMap((v) => v.weights),
+          binding.skin.flatMap((v) => v.weights),
           "VEC4",
         ),
       }
     : {};
-  const inverseBindMatrices = idle ? accessor(idle.inverseBindMatrices, "MAT4") : undefined;
+  const inverseBindMatrices = binding ? accessor(binding.inverseBindMatrices, "MAT4") : undefined;
   const poses = (["yawn", "think", "greet"] as const).filter((name) => look.poses?.[name]);
+  if (motion?.requiredFaceTargets.some((name) => !poses.includes(name))) throw new Error("动作表情缺少对应形态槽");
   // Qt stores absolute target normals. Once any target has NORMAL, omitted
   // channels can become zero normals rather than the unchanged base normal.
   // Supply zero glTF deltas on every facial target in the mixed pose mesh.
@@ -416,18 +424,18 @@ async function convertPmxFiles(
     JSON.stringify({
       asset: { version: "2.0", generator: "VoidMaker PMX presentation converter" },
       scene: 0,
-      scenes: [{ nodes: [...primitives.map((_, i) => i), ...(idle ? [primitives.length] : [])] }],
+      scenes: [{ nodes: [...primitives.map((_, i) => i), ...(binding ? [primitives.length] : [])] }],
       nodes: [
-        ...primitives.map((_, i) => ({ mesh: i, name: `part_${i}`, ...(idle ? { skin: 0 } : {}) })),
-        ...(idle
-          ? idle.nodes.map((node) => ({ ...node, children: node.children.map((i) => i + primitives.length) }))
+        ...primitives.map((_, i) => ({ mesh: i, name: `part_${i}`, ...(binding ? { skin: 0 } : {}) })),
+        ...(binding
+          ? binding.nodes.map((node) => ({ ...node, children: node.children.map((i) => i + primitives.length) }))
           : []),
       ],
-      ...(idle
+      ...(binding
         ? {
             skins: [
               {
-                joints: idle.nodes.map((_, i) => i + primitives.length),
+                joints: binding.nodes.map((_, i) => i + primitives.length),
                 inverseBindMatrices,
                 skeleton: primitives.length,
               },
@@ -465,12 +473,12 @@ async function convertPmxFiles(
     ],
     { timeout: 120_000 },
   );
+  const visiblePositions = sculpted.map((vertex, index) =>
+    motion ? motion.neutralPosition(vertex.position, index) : vertex.position,
+  );
   const bounds = [0, 1, 2].map((axis) =>
-    sculpted.reduce(
-      (range, v) => [
-        Math.min(range[0] ?? Infinity, v.position[axis] ?? 0),
-        Math.max(range[1] ?? -Infinity, v.position[axis] ?? 0),
-      ],
+    visiblePositions.reduce(
+      (range, v) => [Math.min(range[0] ?? Infinity, v[axis] ?? 0), Math.max(range[1] ?? -Infinity, v[axis] ?? 0)],
       [Infinity, -Infinity],
     ),
   );
@@ -484,6 +492,7 @@ async function convertPmxFiles(
     framing: { yaw: 0, zoom: 1, targetY: 0 },
     ...(look.restEyes ? { restEyes: look.restEyes.weight } : {}),
     ...(idle ? { idleRig: idle.rig } : {}),
+    ...(motion ? { motionRig: motion.manifestPath } : {}),
     ...(expressions.length ? { expressions } : {}),
     ...(poses.length ? { poses } : {}),
     parts: pmx.materials.map((material, i) => ({
@@ -508,24 +517,21 @@ async function convertPmxFiles(
   });
   for (const part of manifest.parts) {
     if ((await stat(join(output, part.mesh))).size < 32) throw new Error("转换网格缺失或无效");
-    if (idle) {
+    if (binding) {
       const mesh = await readFile(join(output, part.mesh));
       if (!mesh.includes(Buffer.from("attr_joints")) || !mesh.includes(Buffer.from("attr_weights")))
-        throw new Error("Balsam 丢失待机蒙皮属性");
+        throw new Error("Balsam 丢失骨骼蒙皮属性");
     }
   }
-  if (idle) {
+  if (binding) {
     const qml = await readFile(join(output, "qt", "Avatar.qml"), "utf8");
     // Do not guess a per-material joint order if an importer changes it.
     const lists = [...qml.matchAll(/joints:\s*\[([^\]]+)\]/g)];
     if (
       !lists.length ||
-      lists.some(
-        (m) =>
-          m[1]?.replace(/\s/g, "") !== "idle_joint_0,idle_joint_1,idle_joint_2,idle_joint_3,idle_joint_4,idle_joint_5",
-      )
+      lists.some((m) => m[1]?.replace(/\s/g, "") !== binding.nodes.map((node) => node.name).join(","))
     )
-      throw new Error("Balsam 待机关节顺序与运行时不符");
+      throw new Error("Balsam 骨骼关节顺序与运行时不符");
   }
   await writeFile(join(output, "avatar.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   await writeFile(
@@ -542,10 +548,15 @@ async function convertPmxFiles(
         ...(poses.length ? { poses: poseHashes } : {}),
         look,
         ...(idle ? { idleRig: { joints: 6, weights: "original PMX bone ancestor aggregation", bindPose: pose } } : {}),
+        ...(motion ? { motionRig: motion.provenance, poseMorphs: "face-only in source bind coordinates" } : {}),
         shading: "PMX diffuse + ambient, authored toon ramps, vertex-weighted inverted hull outlines",
         limitations: [
-          idle ? "six-joint runtime linear skinning (SDEF approximated)" : "static BDEF skinning (SDEF approximated)",
-          "no IK, grant solver, VMD, physics or sphere maps",
+          motion
+            ? "full exported joint tracks with original PMX linear skinning (SDEF approximated)"
+            : idle
+              ? "six-joint runtime linear skinning (SDEF approximated)"
+              : "static BDEF skinning (SDEF approximated)",
+          "no runtime IK, grant solver, VMD import, physics or sphere maps",
           "shared toon textures use a procedural ramp",
         ],
       },

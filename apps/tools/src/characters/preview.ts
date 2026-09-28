@@ -1,23 +1,26 @@
-import { readFile, realpath, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
+import { assetPath, boundedFile } from "../../../../packages/adapters/src/character-assets.js";
+import { readMotionRig } from "../../../../packages/adapters/src/character-motion.js";
 import { avatarManifest } from "../../../../packages/contracts/src/character.js";
 
 /** Load local previews without the Host, a session, or any voice device. */
 export async function readPreview(path: string) {
-  if ((await stat(path)).size > 256 * 1024) throw new Error("预览清单过大");
-  const manifest = avatarManifest.parse(JSON.parse(await readFile(path, "utf8")));
+  const manifest = avatarManifest.parse(
+    JSON.parse((await boundedFile(await realpath(path), 256 * 1024)).toString("utf8")),
+  );
   const root = await realpath(dirname(path));
   const assetUrl = async (name: string | undefined) => {
     if (!name) return "";
-    const file = await realpath(join(root, name));
-    const local = relative(root, file);
-    if (local.startsWith("../") || isAbsolute(local) || !(await stat(file)).isFile())
-      throw new Error("预览素材路径越界或无效");
+    const file = await assetPath(root, name);
+    if (!(await stat(file)).isFile()) throw new Error("预览素材类型无效");
     return pathToFileURL(file).href;
   };
+  const { motionRig, ...appearance } = manifest;
   return {
-    ...manifest,
+    ...appearance,
+    ...(motionRig ? { motionRig: await readMotionRig(root, motionRig, manifest.poses ?? []) } : {}),
     parts: await Promise.all(
       manifest.parts.map(async (p) => ({
         ...p,
@@ -64,6 +67,79 @@ export const inspectionFrames = [
   { name: "yawn", yaw: 0, pitch: 0, zoom: 1.8, targetY: 0.21, mode: 0, mouth: 0, blink: 0, pose: "yawn" },
   { name: "think", yaw: 0, pitch: 0, zoom: 1.8, targetY: 0.21, mode: 0, mouth: 0, blink: 0, pose: "think" },
   { name: "greet", yaw: 0, pitch: 0, zoom: 1.8, targetY: 0.21, mode: 0, mouth: 0, blink: 0, pose: "greet" },
+  ...(["yawn", "think", "greet"] as const).flatMap((action) => [
+    ...(
+      [
+        ["enter", 0.16],
+        ["hold", 0.5],
+        ["return", 0.86],
+        ["end", 1],
+      ] as const
+    ).map(([phase, actionProgress]) => ({
+      name: `${action}-${phase}`,
+      yaw: 0,
+      pitch: 0,
+      zoom: 1.55,
+      targetY: 0.21,
+      mode: 0,
+      mouth: 0,
+      blink: 0,
+      action,
+      actionProgress,
+    })),
+    {
+      name: `${action}-hold-side`,
+      yaw: action === "greet" ? 45 : -45,
+      pitch: 0,
+      zoom: 3,
+      targetY: 0.34,
+      mode: 0,
+      mouth: 0,
+      blink: 0,
+      action,
+      actionProgress: 0.5,
+    },
+  ]),
+  ...[
+    { phase: "start", seconds: 3.35, targetY: 0.23, frontX: -0.04, sideX: -0.1 },
+    { phase: "a", seconds: 3.5, targetY: 0.217, frontX: -0.048, sideX: -0.113 },
+    { phase: "b", seconds: 3.9, targetY: 0.157, frontX: -0.154, sideX: -0.222 },
+    { phase: "c", seconds: 4.15, targetY: 0.102, frontX: -0.21, sideX: -0.228 },
+    { phase: "d", seconds: 4.4, targetY: 0.06, frontX: -0.203, sideX: -0.17 },
+    { phase: "e", seconds: 4.6, targetY: 0.041, frontX: -0.175, sideX: -0.121 },
+  ].flatMap(({ phase, seconds, targetY, frontX, sideX }) =>
+    [false, true].map((side) => ({
+      name: `think-retract-${phase}${side ? "-side" : ""}`,
+      yaw: side ? -45 : 0,
+      pitch: 0,
+      zoom: 4,
+      targetX: side ? sideX : frontX,
+      targetY,
+      mode: 0,
+      mouth: 0,
+      blink: 0,
+      action: "think",
+      actionProgress: seconds / 4.8,
+    })),
+  ),
+  ...(
+    [
+      ["enter", 0.25],
+      ["hold", 0.5],
+      ["return", 0.8],
+    ] as const
+  ).map(([phase, actionProgress]) => ({
+    name: `greet-look-${phase}-side`,
+    yaw: 75,
+    pitch: 0,
+    zoom: 2.5,
+    targetY: 0.31,
+    mode: 0,
+    mouth: 0,
+    blink: 0,
+    action: "greet",
+    actionProgress,
+  })),
   {
     name: "yawn-detail",
     yaw: 0,
