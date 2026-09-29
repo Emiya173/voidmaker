@@ -3,6 +3,7 @@ import { pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 export const sessions = pgTable("sessions", {
   id: uuid("id").primaryKey(),
   codexThreadId: text("codex_thread_id"),
+  codexThreadProfile: text("codex_thread_profile").notNull().default(""),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

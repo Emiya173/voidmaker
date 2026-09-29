@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import type { DesktopAdapters } from "../../../packages/adapters/src/desktop.js";
 import type { DesktopStore } from "../../../packages/adapters/src/desktop-store.js";
 import {
+  type DesktopContext,
   type DesktopGrants,
   type DesktopObservation,
   type DesktopPolicy,
@@ -22,7 +23,8 @@ export type DesktopPorts = Readonly<{
   publish: (snapshot: DesktopSnapshot) => void;
   present: () => boolean;
   idle: () => boolean;
-  suggest: (context: string, signal: AbortSignal) => Promise<string>;
+  suggest: (context: string, signal: AbortSignal, images: readonly string[]) => Promise<string>;
+  offer?: (context: DesktopContext) => void;
   revoked: () => void;
   now?: () => number;
 }>;
@@ -184,7 +186,11 @@ export class DesktopController {
       await this.collect(source, signal);
     });
   }
-  private run(fn: (signal: AbortSignal) => Promise<void>, automatic = false): Promise<void> {
+  private run<T>(
+    fn: (signal: AbortSignal) => Promise<T>,
+    automatic = false,
+    propagate = false,
+  ): Promise<T | undefined> {
     this.automatic = automatic;
     this.activeAbort = new AbortController();
     const signal = AbortSignal.any([this.epoch.signal, this.activeAbort.signal]);
@@ -192,6 +198,8 @@ export class DesktopController {
     const operation = fn(signal)
       .catch((error) => {
         if (!signal.aborted) this.error = message(error);
+        if (propagate) throw error;
+        return undefined;
       })
       .finally(() => {
         if (this.active === operation) this.active = null;
@@ -201,7 +209,7 @@ export class DesktopController {
     this.publish();
     return operation;
   }
-  private async collect(source: DesktopSource, signal: AbortSignal): Promise<Observation | null> {
+  private async collect(source: DesktopSource, signal: AbortSignal, screenshot = false): Promise<Observation | null> {
     this.check(source, signal);
     let text = "";
     let png: Buffer | undefined;
@@ -219,8 +227,19 @@ export class DesktopController {
       if (window?.selection === "recent") windowProvider = "niri IPC · 最近聚焦窗口";
     } else if (source === "media") text = await this.ports.adapters.media(signal);
     else {
-      png = await this.ports.adapters.region(signal);
-      text = `用户框选截图（${png.readUInt32BE(16)} × ${png.readUInt32BE(20)}）`;
+      if (screenshot) {
+        this.check("window", signal);
+        const before = await this.ports.adapters.window(signal);
+        this.check("window", signal);
+        this.check("region", signal);
+        if (!before || excludedApp(before.app_id, this.policy)) throw new Error("当前应用已排除或没有可读取的窗口");
+        png = await this.ports.adapters.screenshot(signal);
+        const after = await this.ports.adapters.window(signal);
+        this.check("window", signal);
+        if (!after || after.id !== before.id || excludedApp(after.app_id, this.policy))
+          throw new Error("截图期间窗口已切换，请重试");
+      } else png = await this.ports.adapters.region(signal);
+      text = `${screenshot ? "当前聚焦显示器截图" : "用户框选截图"}（${png.readUInt32BE(16)} × ${png.readUInt32BE(20)}）`;
     }
     this.check(source, signal);
     if (!(await this.ports.adapters.unlocked(signal))) throw new Error("会话已锁定，丢弃桌面读取结果");
@@ -241,7 +260,7 @@ export class DesktopController {
           provider: {
             window: windowProvider,
             media: "MPRIS · playerctl",
-            region: "Wayland · slurp + grim",
+            region: screenshot ? "Wayland · 当前显示器 · grim" : "Wayland · slurp + grim",
           }[source],
           capturedAt: new Date(this.now()).toISOString(),
           expiresAt: new Date(
@@ -282,6 +301,57 @@ export class DesktopController {
       context: `来源：${observation.view.provider}\n采集：${observation.view.capturedAt}\n${observation.view.text}`,
       ...(imageUrl ? { imageUrl } : {}),
       signal,
+    };
+  }
+  /** On-demand chat reads ignore proactive hours; permission and lock checks still apply. */
+  async inspect(screenshot: boolean, abort: AbortSignal): Promise<DesktopContext> {
+    abort.throwIfAborted();
+    if (this.active) {
+      if (!this.automatic) throw new Error("桌面读取进行中，请稍后再试");
+      this.activeAbort?.abort();
+      await this.active;
+    }
+    abort.throwIfAborted();
+    const result = await this.run(
+      async (epoch) => {
+        const signal = AbortSignal.any([epoch, abort]);
+        if (!(await this.ports.adapters.unlocked(signal))) throw new Error("会话已锁定、非活动或空闲，暂停桌面读取");
+        if (screenshot) {
+          this.check("window", signal);
+          this.check("region", signal);
+        }
+        const observations: Observation[] = [];
+        for (const source of ["window", "media"] as const) {
+          if (!hasDesktopGrant(this.grants, source, this.now())) continue;
+          const observation = await this.collect(source, signal);
+          if (!observation) throw new Error("当前应用已排除");
+          observations.push(observation);
+        }
+        if (screenshot) {
+          const image = await this.collect("region", signal, true);
+          if (image) observations.push(image);
+        }
+        if (!observations.length) throw new Error("桌面授权未开启或已过期");
+        return this.combine(observations, signal);
+      },
+      false,
+      true,
+    );
+    if (!result) throw new Error("桌面读取已取消");
+    return result;
+  }
+  private async combine(observations: readonly Observation[], signal: AbortSignal): Promise<DesktopContext> {
+    const shared: DesktopContext[] = [];
+    for (const observation of observations) {
+      signal.throwIfAborted();
+      shared.push(await this.share(observation.view.id));
+    }
+    signal.throwIfAborted();
+    const imageUrl = shared.find((entry) => entry.imageUrl)?.imageUrl;
+    return {
+      context: shared.map((entry) => entry.context).join("\n\n"),
+      ...(imageUrl ? { imageUrl } : {}),
+      signal: this.epoch.signal,
     };
   }
   async tick(): Promise<void> {
@@ -357,7 +427,9 @@ export class DesktopController {
       }
       signal.throwIfAborted();
       const context = observations.map((o) => `${o.view.provider}\n${o.view.text}`).join("\n\n");
-      if (!context || context === this.fingerprint) {
+      const canScreenshot =
+        hasDesktopGrant(this.grants, "region", this.now()) && hasDesktopGrant(this.grants, "window", this.now());
+      if (!context || (!canScreenshot && context === this.fingerprint)) {
         this.pauseReason = "桌面信息未变化";
         return;
       }
@@ -367,7 +439,12 @@ export class DesktopController {
       if (this.observerPaused()) return;
       this.pauseReason = "正在检查是否需要建议";
       this.publish();
-      const suggestion = await this.ports.suggest(context, signal);
+      if (canScreenshot) {
+        const image = await this.collect("region", signal, true);
+        if (image) observations.push(image);
+      }
+      const shared = await this.combine(observations, signal);
+      const suggestion = await this.ports.suggest(shared.context, signal, shared.imageUrl ? [shared.imageUrl] : []);
       signal.throwIfAborted();
       for (const observation of observations) this.check(observation.view.source, signal);
       if (this.observerPaused() || !(await this.ports.adapters.unlocked(signal))) return;
@@ -375,6 +452,7 @@ export class DesktopController {
       this.fingerprint = context;
       this.suggestion = suggestion.slice(0, 2000);
       this.pauseReason = this.suggestion ? "有一条桌面建议" : "当前无需建议";
+      if (this.suggestion) this.ports.offer?.(shared);
     }, true);
   }
   private observerPaused(): boolean {

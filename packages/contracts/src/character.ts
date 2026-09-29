@@ -254,6 +254,24 @@ export const characterDefinition = z
         promptLanguage: z.string().min(1).max(32).default("zh"),
         textLanguage: z.string().min(1).max(32).default("auto"),
         url: localUrl.optional(),
+        waitingClips: z
+          .array(z.object({ audio: asset, subtitle: z.string().trim().min(1).max(80) }).strict())
+          .max(8)
+          .optional(),
+        replyClips: z
+          .array(
+            z
+              .object({
+                id: z.string().regex(/^[a-z0-9_-]{1,40}$/),
+                description: z.string().trim().min(1).max(300),
+                audio: asset,
+                text: z.string().trim().min(1).max(160),
+                subtitle: z.string().trim().min(1).max(80),
+              })
+              .strict(),
+          )
+          .max(16)
+          .optional(),
         references: z
           .array(
             z

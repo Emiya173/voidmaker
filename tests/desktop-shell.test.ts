@@ -37,7 +37,7 @@ ShellRoot {
         DesktopPanel {
             id: panel; anchors.fill: parent; online: true
             snapshot: ({revision: 0, grants: {window: 0, media: 0, region: 0},
-                policy: {proactive: false, intervalSeconds: 300, startHour: 9, endHour: 22, excludedApps: []},
+                policy: {proactive: false, allDay: false, intervalSeconds: 300, startHour: 9, endHour: 22, excludedApps: []},
                 observations: [], busy: false, pauseReason: "", error: "", suggestion: "", nextCheckAt: 0})
             onCommand: value => root.request(value)
         }
@@ -62,6 +62,7 @@ ShellRoot {
             const media = root.control("persistentGrant-media")
             const region = root.control("persistentGrant-region")
             const proactive = root.control("proactiveSwitch")
+            const allDay = root.control("allDaySwitch")
             switch (root.step++) {
             case 0:
                 root.insist(permission && media && region && proactive, "missing switch")
@@ -104,6 +105,12 @@ ShellRoot {
                 root.failSave = true; keys.mouseClick(permission, 15, permission.height / 2); break
             case 10:
                 root.insist(!permission.checked && root.thumb(permission).x === root.offX && panel.snapshot.error === "save failed", "failed save left a false enabled state")
+                root.failSave = false; allDay.forceActiveFocus(); keys.keyClick(Qt.Key_Space); break
+            case 11:
+                root.insist(allDay.checked && root.command.policy.allDay, "all-day option did not persist")
+                keys.keyClick(Qt.Key_Space); break
+            case 12:
+                root.insist(!allDay.checked && !root.command.policy.allDay, "all-day option did not turn off")
                 panel.online = false
                 const count = root.commands.length
                 keys.mouseClick(permission, 15, permission.height / 2)

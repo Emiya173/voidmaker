@@ -1,6 +1,7 @@
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServer } from "../packages/adapters/src/codex.js";
+import { desktopTool } from "../packages/adapters/src/desktop-tool.js";
 
 const clients: CodexAppServer[] = [];
 
@@ -18,6 +19,80 @@ afterEach(async () => {
 });
 
 describe("Codex App Server transport", () => {
+  it("registers only desktop functions, returns image content, and rejects stale or malformed requests", async () => {
+    const read = vi.fn(async () => ({
+      context: "fixture",
+      imageUrl: "data:image/png;base64,fixture",
+      signal: new AbortController().signal,
+    }));
+    const instance = new CodexAppServer(
+      async () => "decline",
+      process.cwd(),
+      process.execPath,
+      [join(process.cwd(), "tests/fixtures/fake-codex.mjs")],
+      { restricted: true, tools: [desktopTool(read)] },
+    );
+    clients.push(instance);
+    await instance.start();
+    const thread = await instance.startThread();
+    const policy = JSON.parse(await instance.run(thread, "policy", () => {}));
+    expect(policy.threadParams.dynamicTools).toHaveLength(1);
+    expect(policy.threadParams.dynamicTools[0]).toMatchObject({ type: "function", name: "read_desktop" });
+    expect(policy.threadParams.config["features.shell_tool"]).toBe(false);
+    const result = JSON.parse(await instance.run(thread, "tool", () => {}));
+    expect(result.success).toBe(true);
+    expect(result.contentItems[1]).toEqual({ type: "inputImage", imageUrl: "data:image/png;base64,fixture" });
+    expect(read).toHaveBeenCalledExactlyOnceWith(true, expect.any(AbortSignal));
+    for (const prompt of ["tool_wrong_thread", "tool_bad_args"])
+      expect(JSON.parse(await instance.run(thread, prompt, () => {})).success).toBe(false);
+    expect(read).toHaveBeenCalledOnce();
+    const upgraded = await instance.startThread("legacy-thread", "persona", "RECENT_HISTORY", true);
+    const upgradedPolicy = JSON.parse(await instance.run(upgraded, "policy", () => {}));
+    expect(upgradedPolicy.threadParams.threadId).toBeUndefined();
+    expect(upgradedPolicy.threadParams.dynamicTools[0].name).toBe("read_desktop");
+    expect(upgradedPolicy.threadParams.baseInstructions).toContain("RECENT_HISTORY");
+  });
+  it("aborts an in-flight tool on stop and never returns late screenshot pixels", async () => {
+    let finish!: (value: { context: string; imageUrl: string; signal: AbortSignal }) => void;
+    const read = vi.fn(
+      (_screenshot: boolean, _signal: AbortSignal) =>
+        new Promise<{ context: string; imageUrl: string; signal: AbortSignal }>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const instance = new CodexAppServer(
+      async () => "decline",
+      process.cwd(),
+      process.execPath,
+      [join(process.cwd(), "tests/fixtures/fake-codex.mjs")],
+      { restricted: true, tools: [desktopTool(read)] },
+    );
+    clients.push(instance);
+    await instance.start();
+    const thread = await instance.startThread();
+    const running = instance.run(thread, "tool", () => {});
+    const rejected = expect(running).rejects.toThrow("停止");
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    await instance.interrupt();
+    await rejected;
+    expect(read.mock.calls[0]?.[1].aborted).toBe(true);
+    finish({ context: "stale", imageUrl: "data:image/png;base64,secret", signal: new AbortController().signal });
+    // The next request is queued after the tool completion microtasks, in the same stdio stream.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const result = JSON.parse(await instance.run(thread, "tool_result", () => {}));
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result)).not.toContain("secret");
+  });
+  it("scopes reply schemas to each turn and preserves image inputs", async () => {
+    const instance = await client();
+    const thread = await instance.startThread();
+    const schema = { type: "object", properties: { segments: { type: "array" } } };
+    const policy = JSON.parse(await instance.run(thread, "policy", () => {}, ["data:image/png;base64,test"], schema));
+    expect(policy.turnParams.outputSchema).toEqual(schema);
+    expect(policy.turnParams.input[1].type).toBe("image");
+    const next = JSON.parse(await instance.run(thread, "policy", () => {}));
+    expect(next.turnParams.outputSchema).toBeUndefined();
+  });
   it.each([
     { model: "gpt-6-sol", reasoningEffort: "medium" as const, observer: false },
     { model: "gpt-6-luna", reasoningEffort: "high" as const, observer: true },

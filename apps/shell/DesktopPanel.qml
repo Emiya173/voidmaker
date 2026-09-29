@@ -14,6 +14,7 @@ ScrollView {
     function configure(enabled) {
         command({type: "desktop_policy", policy: {
             proactive: enabled, intervalSeconds: interval.value,
+            allDay: allDay.checked,
             startHour: startHour.value, endHour: endHour.value,
             excludedApps: excluded.text.split("\n").map(v => v.trim()).filter(v => v.length > 0)
         }})
@@ -31,10 +32,10 @@ ScrollView {
         Label { text: "桌面上下文"; color: "#f1f2f7"; font.pixelSize: 18; font.bold: true }
         Label {
             Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#bbc5dc"
-            text: "授权后可读取并预览。常驻开关会保存；截图仍由你手动框选。"
+            text: "授权后，对话可按需查看当前显示器；也可手动框选。常驻开关会保存。"
         }
         Repeater {
-            model: [{source: "window", name: "窗口（当前 / 最近聚焦）"}, {source: "media", name: "媒体信息"}, {source: "region", name: "框选截图"}]
+            model: [{source: "window", name: "窗口（当前 / 最近聚焦）"}, {source: "media", name: "媒体信息"}, {source: "region", name: "截图（按需 / 框选）"}]
             delegate: ColumnLayout {
                 required property var modelData
                 readonly property double expiry: panel.snapshot ? panel.snapshot.grants[modelData.source] : 0
@@ -78,12 +79,17 @@ ScrollView {
             text: "主动观察"; checked: !!panel.snapshot && panel.snapshot.policy.proactive; enabled: panel.online && !!panel.snapshot && !panel.snapshot.busy
             onClicked: panel.configure(checked) }
         Label { Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#bbc5dc"
-            text: "定期分析已授权的窗口与媒体，开关重启后保留。锁屏、空闲或对话时暂停，不自动截图。" }
+            text: "定期查看已授权的桌面信息和画面，有合适的话题才搭话。锁屏、空闲或对话时暂停。" }
+        ToggleSwitch { id: allDay; objectName: "allDaySwitch"
+            text: "全天观察"; checked: !!panel.snapshot && !!panel.snapshot.policy.allDay
+            enabled: panel.online && !!panel.snapshot && !panel.snapshot.busy
+            onClicked: panel.configure(!!panel.snapshot && panel.snapshot.policy.proactive) }
         RowLayout {
             Label { text: "间隔（秒）"; color: "#f1f2f7" }
             SpinBox { id: interval; from: 60; to: 3600; value: 300; stepSize: 60; editable: true }
         }
         RowLayout {
+            visible: !allDay.checked
             Label { text: "本地时段"; color: "#f1f2f7" }
             SpinBox { id: startHour; from: 0; to: 23; value: 9; editable: true }
             Label { text: "至"; color: "#f1f2f7" }

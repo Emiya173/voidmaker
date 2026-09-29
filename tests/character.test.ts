@@ -4,11 +4,80 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { CharacterController } from "../apps/host/src/character.js";
 import { characterTts, defaultCharacter, loadCharacters } from "../packages/adapters/src/characters.js";
+import { wavFromPcm } from "../packages/adapters/src/pcm.js";
 import { characterDefinition } from "../packages/contracts/src/character.js";
 import { characterPresentation } from "../packages/domain/src/character.js";
 import { initialVoice, voiceTransition } from "../packages/domain/src/voice.js";
 
 const paths: string[] = [];
+it("offers only valid local reply clips to the model and skips duplicate, reserved or broken clips", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "voidmaker-openers-"));
+  paths.push(directory);
+  await mkdir(join(directory, "demo"));
+  const wav = wavFromPcm(Buffer.alloc(32_000));
+  await writeFile(join(directory, "demo", "short.wav"), wav);
+  await writeFile(join(directory, "demo", "bad.wav"), "invalid");
+  await writeFile(join(directory, "demo", "long.wav"), wavFromPcm(Buffer.alloc(32_000 * 6)));
+  await writeFile(join(directory, "outside.wav"), wav);
+  await symlink(join(directory, "outside.wav"), join(directory, "demo", "escape.wav"));
+  const clip = { id: "apology", description: "道歉", text: "ごめんなさい。", subtitle: "对不起。", audio: "short.wav" };
+  await writeFile(
+    join(directory, "demo", "character.json"),
+    JSON.stringify({
+      version: 1,
+      id: "demo",
+      name: "Demo",
+      persona: "测试",
+      voice: {
+        reference: "short.wav",
+        promptText: "参考",
+        replyClips: [
+          clip,
+          clip,
+          { ...clip, id: "none" },
+          ...["bad", "long", "escape"].map((id) => ({ ...clip, id, audio: `${id}.wav` })),
+        ],
+      },
+    }),
+  );
+  const catalog = await loadCharacters(directory);
+  expect(catalog.entries[1]?.replyClips).toEqual([
+    { id: clip.id, description: clip.description, text: clip.text, subtitle: clip.subtitle, wav },
+  ]);
+  expect(catalog.entries[1]?.waitingClips).toBeUndefined();
+  expect(catalog.warnings).toHaveLength(5);
+});
+it("loads short waiting clips separately from synthesis references and skips malformed clips", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "voidmaker-waiting-"));
+  paths.push(directory);
+  await mkdir(join(directory, "demo"));
+  const wav = wavFromPcm(Buffer.alloc(32_000));
+  await writeFile(join(directory, "demo", "short.wav"), wav);
+  await writeFile(join(directory, "demo", "bad.wav"), "invalid");
+  await writeFile(join(directory, "demo", "long.wav"), wavFromPcm(Buffer.alloc(32_000 * 6)));
+  await writeFile(
+    join(directory, "demo", "character.json"),
+    JSON.stringify({
+      version: 1,
+      id: "demo",
+      name: "Demo",
+      persona: "测试",
+      voice: {
+        reference: "short.wav",
+        promptText: "参考",
+        waitingClips: [
+          { audio: "short.wav", subtitle: "嗯……" },
+          { audio: "bad.wav", subtitle: "嗯……" },
+          { audio: "long.wav", subtitle: "嗯……" },
+        ],
+      },
+    }),
+  );
+  const catalog = await loadCharacters(directory);
+  expect(catalog.entries[1]?.waitingClips).toEqual([{ wav, subtitle: "嗯……" }]);
+  expect(catalog.entries[1]?.speechReferences).toBeUndefined();
+  expect(catalog.warnings).toHaveLength(2);
+});
 afterEach(async () => {
   await Promise.all(paths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });

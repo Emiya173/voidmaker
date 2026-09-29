@@ -111,3 +111,10 @@ export function speechSegments(text: string): string[] {
     .trim();
   return (plain.match(/[^。！？!?\n]{1,180}[。！？!?\n]?/gu) ?? []).filter((part) => part.trim());
 }
+
+/** The configured pool contains context-neutral acknowledgements; choose one, without an immediate repeat. */
+export function selectWaitingClip<T>(clips: readonly T[], previous: T | undefined, draw: number): T | undefined {
+  const remaining = clips.filter((clip) => clip !== previous);
+  const choices = remaining.length ? remaining : clips;
+  return choices[Math.floor(draw * choices.length)];
+}

@@ -20,6 +20,7 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
     await cp("apps/shell", dir, { recursive: true });
     let composer = initialComposer;
     let voice = initialVoice(true, false);
+    let continuousStarts = 0;
     const commands: ReturnType<typeof clientCommand.parse>[] = [];
     const failures: string[] = [];
     const clients = new Set<Socket>();
@@ -90,7 +91,16 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
                 });
                 break;
               case "voice_start":
-                voice = { ...voice, phase: "listening", generation: voice.generation + 1 };
+                if (command.continuous && ++continuousStarts === 2) {
+                  send(socket, { type: "error", message: "模拟连续对话启动失败" });
+                  break;
+                }
+                voice = {
+                  ...voice,
+                  continuous: command.continuous,
+                  phase: "listening",
+                  generation: voice.generation + 1,
+                };
                 publishVoice(socket);
                 break;
               case "voice_finish":
@@ -98,7 +108,9 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
                 publishVoice(socket);
                 timers.push(
                   setTimeout(() => {
-                    voice = { ...voice, phase: "review", transcript: "先整理项目文档。" };
+                    voice = voice.continuous
+                      ? { ...voice, phase: "speaking", subtitle: "连续回复。" }
+                      : { ...voice, phase: "review", transcript: "先整理项目文档。" };
                     publishVoice(socket);
                   }, 80),
                 );
@@ -145,6 +157,12 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
               case "stop":
                 voice = { ...initialVoice(true, false), generation: voice.generation + 1, phase: "stopping" };
                 publishVoice(socket);
+                timers.push(
+                  setTimeout(() => {
+                    voice = { ...voice, phase: "idle" };
+                    publishVoice(socket);
+                  }, 20),
+                );
                 break;
             }
           } catch (error) {
@@ -265,6 +283,48 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
           keys.mouseClick(dockWork, 18, 18); root.checkStep++; break
         case 19:
           root.insist(!drawer.visible && chat.visible && !dockWork.selected, "narrow drawer did not return to text card")
+          root.toggleChat()
+          root.insist(dockContinuous.visible && !dockContinuous.enabled, "draft or attachment allowed continuous input")
+          keys.mouseClick(dockContinuous, 18, 18)
+          composer.edit("text", ""); composer.attach(null)
+          root.checkStep++; break
+        case 20:
+          if (composer.pendingText || composer.text || composer.desktopId) return
+          root.insist(!root.chatOpen && dockContinuous.enabled && !dockContinuous.selected, "compact continuous control not ready")
+          root.insist(dock.x >= 0 && dock.x + dock.width <= stage.width && Math.abs(dock.x + dock.width / 2 - art.x - art.width / 2) < 1, "six-button dock is clipped or off-center")
+          keys.mouseClick(dockContinuous, 18, 18)
+          root.checkStep++; break
+        case 21:
+          if (root.phase !== "listening") return
+          root.insist(root.continuous && dockContinuous.selected && inputContinuous.selected && !root.chatOpen, "compact start was not continuous or expanded chat")
+          root.toggleChat(); root.insist(inputContinuous.selected, "expanded control lost active state"); root.toggleChat()
+          root.microphone(); root.checkStep++; break
+        case 22:
+          if (root.phase !== "speaking") return
+          root.insist(dockContinuous.enabled && dockContinuous.selected, "cannot stop continuous speech while busy")
+          keys.mouseClick(dockContinuous, 18, 18)
+          root.checkStep++; break
+        case 23:
+          if (root.phase !== "idle") return
+          root.insist(!root.continuous && !dockContinuous.selected && !inputContinuous.selected && !root.chatOpen, "stopped continuous mode remained highlighted")
+          keys.mouseClick(dockContinuous, 18, 18)
+          root.checkStep++; break
+        case 24:
+          if (!root.errorText.includes("模拟连续对话启动失败")) return
+          root.insist(!dockContinuous.selected && dockContinuous.enabled && !root.continuousPending, "failed start left a stale or locked toggle")
+          root.toggleChat(); keys.mouseClick(inputContinuous, 18, 18)
+          root.checkStep++; break
+        case 25:
+          if (root.phase !== "listening") return
+          root.insist(inputContinuous.selected && dockContinuous.selected, "expanded start did not update compact control")
+          root.toggleChat(); root.stop(); root.checkStep++; break
+        case 26:
+          if (root.phase !== "idle") return
+          root.insist(!dockContinuous.selected && !inputContinuous.selected, "stop button retained continuous mode")
+          root.microphone(); root.checkStep++; break
+        case 27:
+          if (root.phase !== "listening") return
+          root.insist(!root.continuous && !dockContinuous.selected, "single-turn microphone restarted continuous mode")
           root.setVisibility(false)
           console.log("HMI_PASSED"); Qt.quit(); break
         }
@@ -292,7 +352,10 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
       expect(log).not.toMatch(/HMI_FAILED|ReferenceError|TypeError|Failed to load|Cannot assign|Binding loop/);
       expect(failures).toEqual([]);
       expect(commands.filter((command) => command.type === "composer_send")).toHaveLength(1);
-      expect(commands.filter((command) => command.type === "stop")).toHaveLength(1);
+      expect(commands.filter((command) => command.type === "stop")).toHaveLength(3);
+      expect(commands.filter((command) => command.type === "voice_start").map((command) => command.continuous)).toEqual(
+        [false, true, true, true, false],
+      );
     } finally {
       for (const timer of timers) clearTimeout(timer);
       if (child.exitCode === null && child.signalCode === null) {

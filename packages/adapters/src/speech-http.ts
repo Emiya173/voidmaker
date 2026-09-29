@@ -63,14 +63,18 @@ export async function synthesize(
     signal: AbortSignal.any([signal, AbortSignal.timeout(config.timeoutMs)]),
     body: JSON.stringify({
       text,
-      text_lang: config.textLanguage,
+      text_lang: ["ja", "zh"].includes(config.textLanguage) && /[A-Za-z]/.test(text) ? "auto" : config.textLanguage,
       ref_audio_path: config.refAudioPath,
       prompt_text: config.promptText,
       prompt_lang: config.promptLanguage,
-      text_split_method: "cut5",
+      text_split_method: "cut1",
       batch_size: 1,
       media_type: "wav",
       streaming_mode: false,
+      top_k: 15,
+      top_p: 1,
+      temperature: 1,
+      repetition_penalty: 1.2,
     }),
   });
   const wav = await body(response, 32 * 1024 * 1024);

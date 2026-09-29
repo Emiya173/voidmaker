@@ -14,7 +14,7 @@ ShellRoot {
     property bool companionExpanded: false
     property bool logVisible: true
     property bool useModel: false
-    property bool continuous: false
+    property bool continuousPending: false
     property string drawerPage: ""
     property bool settingsBusy: false
     property bool ready: false
@@ -29,13 +29,19 @@ ShellRoot {
     property var character: null
     property string sessionId: ""
     readonly property string phase: voice ? voice.phase : "idle"
+    readonly property bool continuous: !!voice && voice.continuous
     readonly property bool characterReady: !!character && !character.changing && character.sessionId === sessionId
-    readonly property bool canSend: ready && transport.connected && status === "idle" && !settingsBusy && characterReady && ["idle", "review"].includes(phase)
+    readonly property bool canSend: ready && transport.connected && status === "idle" && !settingsBusy && !continuousPending && characterReady && ["idle", "review"].includes(phase)
     readonly property bool canEditContext: canSend && phase === "idle" && (!voice || !voice.continuous)
-    readonly property bool busy: status === "thinking" || status === "stopping" || !["idle", "review"].includes(phase)
+    readonly property bool busy: continuousPending || status === "thinking" || status === "stopping" || !["idle", "review"].includes(phase)
     readonly property bool hasTranscript: composer.generation >= 0
     readonly property bool chatOpen: immersive || companionExpanded
     readonly property bool canListen: canSend && !!voice && voice.inputAvailable && !hasTranscript
+    readonly property bool canToggleContinuous: ready && transport.connected && !continuousPending && phase !== "stopping" && status !== "stopping"
+        && (continuous || (canListen && !composer.text.trim() && !composer.desktopId))
+    readonly property string continuousLabel: continuous ? "停止连续对话" : continuousPending ? "正在开启连续对话…"
+        : hasTranscript ? "请先发送或放弃当前转写" : composer.text.trim() || composer.desktopId ? "请先处理文字草稿和附加内容"
+        : !voice || !voice.inputAvailable ? "请在设置中配置 ASR" : "开始连续对话：转写后自动发送"
     readonly property string phaseLabel: !transport.connected ? "未连接" : !ready ? "连接中…" : character && character.changing ? "切换中…"
         : ({preparing: "准备录音…", listening: "录音中", transcribing: "识别中…", interrupting: "正在打断…", thinking: "思考中…", synthesizing: "准备语音…", speaking: "回应中", stopping: "停止中…"})[phase] || (status === "thinking" ? "思考中…" : "")
     readonly property string notice: errorText || (voice ? voice.error : "") || (art.modelError ? "3D 加载失败，当前显示立绘" : "")
@@ -84,9 +90,15 @@ ShellRoot {
     function microphone() {
         errorText = ""
         if (phase === "listening") send({type: "voice_finish"})
-        else if (canListen) send({type: "voice_start", continuous})
+        else if (canListen) send({type: "voice_start", continuous: false})
     }
-    function stop() { replyDelay.stop(); reply = ""; send({type: "stop"}) }
+    function toggleContinuous() {
+        if (!canToggleContinuous) return
+        errorText = ""
+        if (continuous) stop()
+        else { continuousPending = true; send({type: "voice_start", continuous: true}) }
+    }
+    function stop() { continuousPending = false; replyDelay.stop(); reply = ""; send({type: "stop"}) }
     function sentence(text) {
         const clean = text.replace(/```[\s\S]*?```/g, "代码已显示在对话中。").replace(/[*#`]/g, "").trim()
         const parts = clean.match(/[^。！？!?\n]{1,180}[。！？!?\n]?/g) || []
@@ -95,9 +107,9 @@ ShellRoot {
     function setVoice(value) {
         const previous = phase
         voice = value
+        continuousPending = false
         if (value.subtitle) { replyDelay.stop(); reply = value.subtitle }
         if (["listening", "preparing", "stopping"].includes(value.phase)) { replyDelay.stop(); reply = "" }
-        if (value.phase === "review" && !value.continuous) continuous = false
         if (value.phase === "idle" && previous !== "idle" && status === "idle" && reply) replyDelay.restart()
     }
     function receive(line) {
@@ -142,7 +154,7 @@ ShellRoot {
             break
         case "approval": approvalId = event.requestId; approvalText = event.description; break
         case "approval_closed": if (approvalId === event.requestId) approvalId = ""; break
-        case "error": errorText = event.message; break
+        case "error": continuousPending = false; errorText = event.message; break
         }
     }
     IpcHandler {
@@ -159,6 +171,7 @@ ShellRoot {
         onMessage: line => root.receive(line)
         onConnectedChanged: {
             root.ready = false
+            root.continuousPending = false
             if (connected) {
                 root.errorText = ""; root.send({type: "hello", version: 10})
                 if (workPanel.selectedId) root.send({type: "work_get", id: workPanel.selectedId})
@@ -310,9 +323,8 @@ ShellRoot {
                             RowLayout {
                                 Layout.fillWidth: true
                                 IconButton { glyph: "plus"; label: "附加桌面上下文"; selected: root.drawerPage === "desktop"; onClicked: root.togglePage("desktop") }
-                                IconButton { glyph: "loop"; label: root.continuous ? "关闭连续语音" : "连续语音：转写后自动发送"; selected: root.continuous
-                                    enabled: !root.busy && !root.hasTranscript && !composer.text.trim() && !composer.desktopId
-                                    onClicked: root.continuous = !root.continuous }
+                                IconButton { id: inputContinuous; glyph: "loop"; label: root.continuousLabel; selected: root.continuous
+                                    enabled: root.canToggleContinuous; onClicked: root.toggleContinuous() }
                                 IconButton { glyph: "work"; label: "将文字转为任务草稿"; enabled: !!composer.text.trim()
                                     onClicked: { workPanel.useTranscript(composer.text); root.openPage("work") } }
                                 Item { Layout.fillWidth: true }
@@ -329,18 +341,21 @@ ShellRoot {
             Rectangle {
                 id: dock
                 visible: !root.immersive
-                width: 228; height: 52
+                readonly property real buttonWidth: Math.min(40, (art.width - 32) / 6)
+                width: buttonWidth * 6 + 32; height: 52
                 x: art.x + (art.width - width) / 2; y: stage.height - height - 4
                 radius: 5; color: "#f0202d30"; border.color: "#655367"
                 Grid {
-                    anchors.centerIn: parent; columns: 5; spacing: 4
-                    IconButton { id: dockChat; glyph: "chat"; label: root.companionExpanded && !root.drawerPage ? "收起文字卡" : "文字交流"; selected: root.companionExpanded && !root.drawerPage; onClicked: root.toggleChat() }
-                    IconButton { glyph: root.phase === "listening" ? "check" : "mic"; label: root.phase === "listening" ? "结束说话" : (root.voice && root.voice.inputAvailable ? "开始说话" : "请在设置中配置 ASR")
+                    anchors.centerIn: parent; columns: 6; spacing: 4
+                    IconButton { id: dockChat; implicitWidth: dock.buttonWidth; glyph: "chat"; label: root.companionExpanded && !root.drawerPage ? "收起文字卡" : "文字交流"; selected: root.companionExpanded && !root.drawerPage; onClicked: root.toggleChat() }
+                    IconButton { implicitWidth: dock.buttonWidth; glyph: root.phase === "listening" ? "check" : "mic"; label: root.phase === "listening" ? "结束说话" : (root.voice && root.voice.inputAvailable ? "开始说话" : "请在设置中配置 ASR")
                         enabled: root.phase === "listening" || root.canListen; selected: root.phase === "listening"; onClicked: root.microphone() }
-                    IconButton { glyph: root.busy ? "stop" : "send"; label: root.busy ? "停止当前对话" : "发送转写"; accent: theme.mint
+                    IconButton { id: dockContinuous; implicitWidth: dock.buttonWidth; glyph: "loop"; label: root.continuousLabel; selected: root.continuous
+                        enabled: root.canToggleContinuous; onClicked: root.toggleContinuous() }
+                    IconButton { implicitWidth: dock.buttonWidth; glyph: root.busy ? "stop" : "send"; label: root.busy ? "停止当前对话" : "发送转写"; accent: theme.mint
                         enabled: root.busy || (root.canSend && root.hasTranscript && !!composer.transcript.trim()); onClicked: root.busy ? root.stop() : root.submit("transcript") }
-                    IconButton { id: dockWork; glyph: "work"; label: root.drawerPage === "work" ? "收起后台任务" : "后台任务"; selected: root.drawerPage === "work"; onClicked: root.togglePage("work") }
-                    IconButton { id: dockExpand; glyph: "expand"; label: "沉浸交流"; onClicked: root.toggleImmersive() }
+                    IconButton { id: dockWork; implicitWidth: dock.buttonWidth; glyph: "work"; label: root.drawerPage === "work" ? "收起后台任务" : "后台任务"; selected: root.drawerPage === "work"; onClicked: root.togglePage("work") }
+                    IconButton { id: dockExpand; implicitWidth: dock.buttonWidth; glyph: "expand"; label: "沉浸交流"; onClicked: root.toggleImmersive() }
                 }
             }
             TranscriptCard {

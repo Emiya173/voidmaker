@@ -126,6 +126,28 @@ it.skipIf(!url)(
         .toBe(true);
       await expect.poll(() => events.some((event) => event.type === "status" && event.status === "idle")).toBe(true);
       expect(events.some((event) => event.type === "composer" && event.composer.text === "")).toBe(true);
+      expect(
+        events
+          .filter((event) => event.type === "delta")
+          .map((event) => event.text)
+          .join(""),
+      ).toBe("你好");
+      expect(
+        events
+          .filter((event) => event.type === "message" && event.message.role === "assistant")
+          .map((event) => event.message.text),
+      ).toEqual(["你好"]);
+      events = [];
+      send({ type: "send", text: "bad_reply" });
+      await expect
+        .poll(() => events.some((event) => event.type === "error" && event.message.includes("回复格式无效")))
+        .toBe(true);
+      await expect.poll(() => events.some((event) => event.type === "status" && event.status === "idle")).toBe(true);
+      expect(
+        events.some(
+          (event) => event.type === "delta" || (event.type === "message" && event.message.role === "assistant"),
+        ),
+      ).toBe(false);
       send({
         type: "composer_edit",
         sessionId: initial.sessionId,
@@ -184,7 +206,24 @@ it.skipIf(!url)(
       send({ type: "desktop_revoke" });
       await expect.poll(() => events.some((e) => e.type === "status" && e.status === "idle")).toBe(true);
       expect(events.some((e) => e.type === "message" && e.message.role === "assistant")).toBe(false);
+      events = [];
       send({ type: "desktop_grant", source: "window", minutes: 15 });
+      await expect
+        .poll(() => events.some((e) => e.type === "desktop" && !e.desktop.busy && e.desktop.grants.window > 0))
+        .toBe(true);
+      events = [];
+      send({ type: "send", text: "desktop_tool" });
+      await expect.poll(() => events.some((e) => e.type === "message" && e.message.role === "assistant")).toBe(true);
+      await expect.poll(() => events.some((e) => e.type === "status" && e.status === "idle")).toBe(true);
+      const toolReply = events.find((e) => e.type === "message" && e.message.role === "assistant");
+      expect(toolReply?.type === "message" && JSON.parse(toolReply.message.text)).toEqual({
+        success: true,
+        sawContext: true,
+      });
+      expect(
+        events.some((e) => e.type === "message" && e.message.role === "user" && e.message.text === "desktop_tool"),
+      ).toBe(true);
+      events = [];
       send({ type: "project_add", name: "Host test", path: dir });
       await expect.poll(() => events.some((e) => e.type === "work_changed")).toBe(true);
       send({ type: "work_list" });

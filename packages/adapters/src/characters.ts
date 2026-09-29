@@ -10,12 +10,13 @@ import {
   characterDefinition,
   type PortraitExpression,
 } from "../../contracts/src/character.js";
-import type { SpeechReference } from "../../contracts/src/speech.js";
+import type { ReplyClip, SpeechReference, WaitingClip } from "../../contracts/src/speech.js";
 import { type PixelIcon, pixelIcon } from "../../contracts/src/tray-icon.js";
 import type { VoiceConfig } from "../../contracts/src/voice.js";
 import type { Portraits } from "../../domain/src/character.js";
 import { assetPath, boundedFile } from "./character-assets.js";
 import { readMotionRig } from "./character-motion.js";
+import { readWav } from "./pcm.js";
 
 export type Character = Readonly<{
   id: string;
@@ -28,6 +29,8 @@ export type Character = Readonly<{
   trayIcon?: PixelIcon;
   avatar?: AvatarPresentation;
   speechReferences?: readonly SpeechReference[];
+  waitingClips?: readonly WaitingClip[];
+  replyClips?: readonly ReplyClip[];
   voice?: Readonly<Omit<NonNullable<VoiceConfig["tts"]>, "url" | "timeoutMs"> & { url?: string }>;
 }>;
 export type CharacterCatalog = Readonly<{ entries: readonly Character[]; warnings: readonly string[] }>;
@@ -126,6 +129,8 @@ export async function loadCharacters(
         }
       }
       const speechReferences: SpeechReference[] = [];
+      const waitingClips: WaitingClip[] = [];
+      const replyClips: ReplyClip[] = [];
       let avatar: AvatarPresentation | undefined;
       if (definition.avatar) {
         try {
@@ -191,6 +196,34 @@ export async function loadCharacters(
           textLanguage: definition.voice.textLanguage,
           ...(definition.voice.url ? { url: definition.voice.url } : {}),
         };
+        for (const clip of definition.voice.waitingClips ?? []) {
+          try {
+            const wav = await boundedFile(await assetPath(root, clip.audio), 2 * 1024 * 1024);
+            const { duration } = readWav(wav);
+            if (duration < 0.2 || duration > 5) throw new Error("过渡音应为简短应答");
+            waitingClips.push({ wav, subtitle: clip.subtitle });
+          } catch {
+            warnings.push(`${definition.name}：过渡音不可用，已跳过`);
+          }
+        }
+        for (const clip of definition.voice.replyClips ?? []) {
+          try {
+            if (clip.id === "none" || replyClips.some((entry) => entry.id === clip.id))
+              throw new Error("句首原声 id 重复或保留");
+            const wav = await boundedFile(await assetPath(root, clip.audio), 2 * 1024 * 1024);
+            const { duration } = readWav(wav);
+            if (duration < 0.2 || duration > 5) throw new Error("句首原声应为简短回应");
+            replyClips.push({
+              id: clip.id,
+              description: clip.description,
+              text: clip.text,
+              subtitle: clip.subtitle,
+              wav,
+            });
+          } catch {
+            warnings.push(`${definition.name}：${clip.id} 句首原声不可用，已跳过`);
+          }
+        }
         for (const reference of definition.voice.references ?? []) {
           try {
             if (reference.id === "neutral" || speechReferences.some((entry) => entry.id === reference.id))
@@ -222,6 +255,8 @@ export async function loadCharacters(
         ...(avatar ? { avatar } : {}),
         ...(voice ? { voice } : {}),
         ...(speechReferences.length ? { speechReferences } : {}),
+        ...(waitingClips.length ? { waitingClips } : {}),
+        ...(replyClips.length ? { replyClips } : {}),
       });
     } catch {
       warnings.push(`${name}：角色配置无效，已跳过`);

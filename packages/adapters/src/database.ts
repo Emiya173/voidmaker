@@ -73,17 +73,20 @@ export class Database {
     await this.pool.end();
   }
 
-  async ensureSession(sessionId = DEFAULT_SESSION_ID): Promise<string | null> {
+  async ensureSession(sessionId = DEFAULT_SESSION_ID, profile?: string): Promise<string | null> {
     await this.db.insert(sessions).values({ id: sessionId }).onConflictDoNothing();
     const rows = await this.db
-      .select({ codexThreadId: sessions.codexThreadId })
+      .select({ codexThreadId: sessions.codexThreadId, profile: sessions.codexThreadProfile })
       .from(sessions)
       .where(eq(sessions.id, sessionId));
-    return rows[0]?.codexThreadId ?? null;
+    return profile !== undefined && rows[0]?.profile !== profile ? null : (rows[0]?.codexThreadId ?? null);
   }
 
-  async setCodexThread(sessionId: string, threadId: string): Promise<void> {
-    await this.db.update(sessions).set({ codexThreadId: threadId }).where(eq(sessions.id, sessionId));
+  async setCodexThread(sessionId: string, threadId: string, profile = ""): Promise<void> {
+    await this.db
+      .update(sessions)
+      .set({ codexThreadId: threadId, codexThreadProfile: profile })
+      .where(eq(sessions.id, sessionId));
   }
 
   async addMessage(sessionId: string, role: Message["role"], text: string): Promise<Message> {

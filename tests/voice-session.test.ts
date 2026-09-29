@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { VoiceController, type VoicePorts } from "../apps/host/src/voice.js";
 import type { VoiceAudioSession } from "../packages/adapters/src/aec-session.js";
 import { advanceBarge, initialBarge } from "../packages/domain/src/barge-in.js";
+import { speechSegments } from "../packages/domain/src/voice.js";
+
+const reply = (text: string) =>
+  speechSegments(text).map((subtitle) => ({ subtitle, text: subtitle, referenceId: "neutral" }));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -37,10 +41,72 @@ function fixture() {
   return { device, session, ports, unwatch, speech: () => speech() };
 }
 describe("persistent voice sessions", () => {
+  it("allows barge-in during a model-selected opener and drops the prefetched continuation", async () => {
+    const { ports, speech, session } = fixture();
+    const recording = Buffer.from("original");
+    const play = vi.fn(
+      (_wav: Buffer, signal: AbortSignal) =>
+        new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true })),
+    );
+    const voice = new VoiceController({ ...ports, play, recordedClip: () => recording }, true, true, true);
+    voice.listen(true);
+    await vi.waitFor(() => expect(voice.snapshot.phase).toBe("review"));
+    const speaking = voice.speak(
+      [
+        { subtitle: "对不起。", text: "ごめんなさい。", referenceId: "neutral", clipId: "apology" },
+        ...reply("后续。再后续。"),
+      ],
+      voice.beginReply(),
+    );
+    await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
+    expect(play.mock.calls[0]?.[0]).toBe(recording);
+    speech();
+    await speaking;
+    expect(ports.synthesize).toHaveBeenCalledOnce();
+    expect(vi.mocked(ports.synthesize).mock.calls[0]?.[1].aborted).toBe(true);
+    expect(play).toHaveBeenCalledOnce();
+    voice.resumeListening();
+    expect(session.capture).toHaveBeenCalledTimes(2);
+    expect(ports.openSession).toHaveBeenCalledOnce();
+    await voice.cancel();
+  });
+  it("interrupts the model during a waiting clip and resumes the existing session without stale speech", async () => {
+    const { ports, speech, session } = fixture();
+    const interruptReply = vi.fn(async () => {});
+    const play = vi.fn(
+      (_wav: Buffer, signal: AbortSignal) =>
+        new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true })),
+    );
+    const voice = new VoiceController(
+      { ...ports, play, interruptReply, waitingClip: () => ({ wav: Buffer.alloc(0), subtitle: "嗯……" }) },
+      true,
+      true,
+      true,
+    );
+    voice.listen(true);
+    await vi.waitFor(() => expect(voice.snapshot.phase).toBe("review"));
+    vi.useFakeTimers();
+    try {
+      const generation = voice.beginReply();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(play).toHaveBeenCalledOnce();
+      speech();
+      expect(interruptReply).toHaveBeenCalledOnce();
+      expect(voice.wasInterrupted(generation)).toBe(true);
+      await voice.speak(reply("过期回复。"), generation);
+      expect(ports.synthesize).not.toHaveBeenCalled();
+      expect(voice.snapshot.phase).toBe("idle");
+      voice.resumeListening();
+      expect(session.capture).toHaveBeenCalledTimes(2);
+      await voice.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("never opens a microphone for a text reply and closes single-turn input before ASR", async () => {
     const { ports, session } = fixture();
     const voice = new VoiceController(ports, true, true, true);
-    await voice.speak("文字回复", voice.beginReply());
+    await voice.speak(reply("文字回复"), voice.beginReply());
     expect(ports.openSession).not.toHaveBeenCalled();
     voice.listen();
     await vi.waitFor(() => expect(voice.snapshot.phase).toBe("review"));
@@ -75,12 +141,13 @@ describe("persistent voice sessions", () => {
     const voice = new VoiceController({ ...ports, play }, true, true, true);
     voice.listen(true);
     await vi.waitFor(() => expect(voice.snapshot.phase).toBe("review"));
-    const speaking = voice.speak("第一句。第二句。", voice.beginReply());
+    const speaking = voice.speak(reply("第一句。第二句。第三句。"), voice.beginReply());
     await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
     speech();
     expect(voice.snapshot.phase).toBe("interrupting");
     await speaking;
-    expect(ports.synthesize).toHaveBeenCalledOnce();
+    expect(ports.synthesize).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(ports.synthesize).mock.calls[1]?.[1].aborted).toBe(true);
     expect(unwatch).toHaveBeenCalledOnce();
     expect(session.capture).toHaveBeenCalledOnce();
     speech(); // already removed watcher must not change the completed turn

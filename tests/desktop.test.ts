@@ -31,6 +31,7 @@ async function fixture() {
       window: vi.fn(async () => ({ id: 1, app_id: "test", title: "private window" })),
       media: vi.fn(async () => "private media"),
       region: vi.fn(async () => png),
+      screenshot: vi.fn(async () => png),
       unlocked: vi.fn(async () => true),
     },
     store: {
@@ -42,6 +43,7 @@ async function fixture() {
     present: vi.fn(() => true),
     idle: vi.fn(() => true),
     suggest: vi.fn<DesktopPorts["suggest"]>(async () => "建议"),
+    offer: vi.fn(),
     revoked: vi.fn(),
     now: () => now,
   } satisfies DesktopPorts;
@@ -102,6 +104,8 @@ describe("desktop grants and observation", () => {
     expect(observationPause(policy, grants, 1, 23, true, true)).toBe("");
     expect(observationPause(policy, grants, 1, 12, true, true)).toContain("时段");
     expect(observationPause({ ...policy, endHour: 22 }, grants, 1, 22, true, true)).toContain("时段");
+    expect(observationPause({ ...policy, allDay: true }, grants, 1, 12, true, true)).toBe("");
+    expect(observationPause({ ...policy, allDay: true }, grants, 1, 12, false, true)).toContain("空闲");
     expect(observationPause(policy, grants, 100, 23, true, true)).toContain("授权");
     expect(excludedApp("ORG.KEEPASSXC.KEEPASSXC", policy)).toBe(true);
   });
@@ -152,7 +156,7 @@ describe("desktop grants and observation", () => {
     expect(await readdir(f.directory)).toEqual([]);
     await expect(f.controller.share(observation.id)).rejects.toThrow("过期");
   });
-  it("pauses for absent UI, ongoing chat and locks; never captures a screenshot automatically", async () => {
+  it("pauses for absent UI, ongoing chat and locks; never opens region selection automatically", async () => {
     const f = await fixture();
     await f.enable();
     await f.controller.grant("region", 15);
@@ -172,11 +176,100 @@ describe("desktop grants and observation", () => {
     await f.controller.tick();
     expect(f.ports.suggest).toHaveBeenCalledTimes(1);
     expect(f.ports.adapters.region).not.toHaveBeenCalled();
+    expect(f.ports.adapters.screenshot).toHaveBeenCalledOnce();
+    expect(f.ports.suggest.mock.calls[0]?.[2][0]).toMatch(/^data:image\/png;base64,/);
+    expect(f.ports.offer).toHaveBeenCalledOnce();
     expect(f.ports.adapters.media).not.toHaveBeenCalled();
     expect(JSON.stringify(f.ports.store.audit.mock.calls)).not.toContain("private window");
     f.advance(300_000);
     await f.controller.tick();
-    expect(f.ports.suggest).toHaveBeenCalledTimes(1);
+    expect(f.ports.suggest).toHaveBeenCalledTimes(2);
+  });
+  it("reads a fresh screenshot on demand outside proactive hours and keeps pixels out of audit metadata", async () => {
+    const f = await fixture();
+    await f.controller.grant("window", 15, true);
+    await f.controller.grant("region", 15, true);
+    await f.controller.configure(desktopPolicy.parse({ proactive: true, startHour: 1, endHour: 2 }));
+    const data = await f.controller.inspect(true, new AbortController().signal);
+    expect(data.imageUrl).toMatch(/^data:image\/png;base64,/);
+    expect(data.context).toContain("当前聚焦显示器截图");
+    expect(f.ports.adapters.region).not.toHaveBeenCalled();
+    expect(f.ports.suggest).not.toHaveBeenCalled();
+    expect(JSON.stringify(f.ports.store.audit.mock.calls)).not.toMatch(/base64|private window/);
+    await f.controller.revoke("region");
+    expect(data.signal.aborted).toBe(true);
+    await expect(f.controller.inspect(true, new AbortController().signal)).rejects.toThrow("授权");
+  });
+  it("does not capture denied, excluded, locked or cancelled inputs and rejects a focus switch during capture", async () => {
+    const f = await fixture();
+    const signal = new AbortController().signal;
+    await expect(f.controller.inspect(true, signal)).rejects.toThrow("授权");
+    await f.controller.grant("window", 15, true);
+    await f.controller.grant("region", 15, true);
+    f.ports.adapters.unlocked.mockResolvedValue(false);
+    await expect(f.controller.inspect(true, signal)).rejects.toThrow("锁定");
+    f.ports.adapters.unlocked.mockResolvedValue(true);
+    f.ports.adapters.window.mockResolvedValue({ id: 1, app_id: "org.keepassxc.KeePassXC", title: "secret" });
+    await expect(f.controller.inspect(true, signal)).rejects.toThrow("排除");
+    expect(f.ports.adapters.screenshot).not.toHaveBeenCalled();
+    f.ports.adapters.window.mockResolvedValue({ id: 1, app_id: "test", title: "before" });
+    const late = pending<Buffer>();
+    f.ports.adapters.screenshot.mockReturnValue(late.promise);
+    const abort = new AbortController();
+    const reading = f.controller.inspect(true, abort.signal);
+    const failed = expect(reading).rejects.toThrow();
+    await vi.waitFor(() => expect(f.ports.adapters.screenshot).toHaveBeenCalledOnce());
+    abort.abort();
+    late.resolve(Buffer.alloc(24));
+    await failed;
+    expect(f.controller.snapshot.observations.some((o) => o.source === "region")).toBe(false);
+    f.ports.adapters.screenshot.mockImplementation(async () => {
+      f.ports.adapters.window.mockResolvedValue({ id: 2, app_id: "test", title: "after" });
+      return Buffer.alloc(24);
+    });
+    await expect(f.controller.inspect(true, signal)).rejects.toThrow("窗口已切换");
+    expect(f.controller.snapshot.observations.some((o) => o.source === "region")).toBe(false);
+  });
+  it("preempts background inspection for a user request without offering stale suggestions", async () => {
+    const f = await fixture();
+    await f.enable();
+    const late = pending<string>();
+    f.ports.suggest.mockReturnValue(late.promise);
+    const tick = f.controller.tick();
+    await vi.waitFor(() => expect(f.ports.suggest).toHaveBeenCalledOnce());
+    const reading = f.controller.inspect(false, new AbortController().signal);
+    expect(f.ports.suggest.mock.calls[0]?.[1].aborted).toBe(true);
+    late.resolve("过期建议");
+    await tick;
+    expect((await reading).context).toContain("private window");
+    expect(f.ports.offer).not.toHaveBeenCalled();
+  });
+  it("does not promote a silent observation to the dialogue model", async () => {
+    const f = await fixture();
+    await f.enable();
+    f.ports.suggest.mockResolvedValue("");
+    await f.controller.tick();
+    expect(f.ports.offer).not.toHaveBeenCalled();
+    f.advance();
+    await f.controller.tick();
+    expect(f.ports.suggest).toHaveBeenCalledOnce();
+  });
+  it("continues on-demand screenshots and proactive observation when a listed player has no media", async () => {
+    const f = await fixture();
+    const run = vi.fn(async (_executable: string, args: readonly string[]) => {
+      if (args[0] === "--list-all") return Buffer.from("browser");
+      throw new Error("playerctl 失败: No player could handle this command");
+    });
+    f.ports.adapters.media.mockImplementation(() => desktopAdapters(run).media(new AbortController().signal));
+    await f.controller.grant("media", 15);
+    await f.controller.grant("region", 15);
+    await f.enable();
+    expect((await f.controller.inspect(true, new AbortController().signal)).imageUrl).toMatch(/^data:image/);
+    await f.controller.tick();
+    expect(f.ports.suggest).toHaveBeenCalledOnce();
+    expect(f.ports.suggest.mock.calls[0]?.[0]).toContain("当前没有可读取的媒体信息");
+    expect(f.ports.suggest.mock.calls[0]?.[2][0]).toMatch(/^data:image/);
+    expect(f.controller.snapshot.error).toBe("");
   });
   it("cancels an in-flight suggestion on lock and suppresses a stale model response", async () => {
     const f = await fixture();
@@ -196,6 +289,40 @@ describe("desktop grants and observation", () => {
 });
 
 describe("desktop process boundaries", () => {
+  it("skips unavailable media players without masking bus errors or cancellation", async () => {
+    const signal = new AbortController().signal;
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(Buffer.from("closed\nactive"))
+      .mockRejectedValueOnce(new Error("playerctl 失败: No player could handle this command"))
+      .mockResolvedValueOnce(Buffer.from("active\u001fPlaying\u001fartist\u001ftitle"));
+    expect(await desktopAdapters(run).media(signal)).toContain("播放器：active");
+    const missing = vi.fn().mockRejectedValue(new Error("playerctl 失败: No players found"));
+    expect(await desktopAdapters(missing).media(signal)).toBe("当前没有媒体播放器");
+    const broken = vi.fn().mockRejectedValue(new Error("playerctl 失败: session bus unavailable"));
+    await expect(desktopAdapters(broken).media(signal)).rejects.toThrow("session bus unavailable");
+    const abort = new AbortController();
+    const cancelled = vi.fn(async () => {
+      abort.abort();
+      throw new Error("playerctl 失败: No players found");
+    });
+    await expect(desktopAdapters(cancelled).media(abort.signal)).rejects.toThrow();
+  });
+  it("captures only the focused output at a bounded size, without clipboard access or full-screen fallback", async () => {
+    const png = Buffer.alloc(24);
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png);
+    png.writeUInt32BE(1920, 16);
+    png.writeUInt32BE(1080, 20);
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce(Buffer.from(JSON.stringify({ name: "DP-1", logical: { width: 3840, height: 2160 } })))
+      .mockResolvedValueOnce(png);
+    expect(await desktopAdapters(run).screenshot(new AbortController().signal)).toBe(png);
+    expect(run.mock.calls[1]?.[1]).toEqual(["-o", "DP-1", "-s", "0.5", "-t", "png", "-"]);
+    const broken = vi.fn(async () => Buffer.from("null"));
+    await expect(desktopAdapters(broken).screenshot(new AbortController().signal)).rejects.toThrow();
+    expect(broken).toHaveBeenCalledOnce();
+  });
   it("uses the compositor focus timestamp when the assistant panel owns keyboard focus", async () => {
     const windows = [
       { id: 90, app_id: "older", title: "older", is_focused: false, focus_timestamp: { secs: 4, nanos: 999 } },

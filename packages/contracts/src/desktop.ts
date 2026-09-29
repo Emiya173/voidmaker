@@ -4,6 +4,7 @@ export const desktopSource = z.enum(["window", "media", "region"]);
 export type DesktopSource = z.infer<typeof desktopSource>;
 export const desktopPolicy = z.object({
   proactive: z.boolean().default(false),
+  allDay: z.boolean().default(false),
   intervalSeconds: z.int().min(60).max(3600).default(300),
   startHour: z.int().min(0).max(23).default(9),
   endHour: z.int().min(0).max(23).default(22),
@@ -37,6 +38,7 @@ export type DesktopSnapshot = Readonly<{
   suggestion: string;
   nextCheckAt: number;
 }>;
+export type DesktopContext = Readonly<{ context: string; imageUrl?: string; signal: AbortSignal }>;
 export const desktopCommands = [
   z.object({
     type: z.literal("desktop_grant"),

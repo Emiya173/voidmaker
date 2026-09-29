@@ -13,20 +13,28 @@ import {
   characterTts,
   loadCharacters,
 } from "../../../packages/adapters/src/characters.js";
+import {
+  parseReply,
+  ReplyStream,
+  replyFormat,
+  replyInstructions,
+  replyText,
+} from "../../../packages/adapters/src/chat-reply.js";
 import { CodexAppServer } from "../../../packages/adapters/src/codex.js";
 import { Database } from "../../../packages/adapters/src/database.js";
 import { desktopAdapters } from "../../../packages/adapters/src/desktop.js";
 import { suggestDesktop } from "../../../packages/adapters/src/desktop-codex.js";
 import { DesktopStore } from "../../../packages/adapters/src/desktop-store.js";
+import { desktopTool, desktopToolProfile } from "../../../packages/adapters/src/desktop-tool.js";
 import { inspectAec, inspectDevices, inspectModel } from "../../../packages/adapters/src/diagnostics.js";
 import { HistoryStore } from "../../../packages/adapters/src/history-store.js";
 import { sessionActive } from "../../../packages/adapters/src/session.js";
 import { synthesize, transcribe } from "../../../packages/adapters/src/speech-http.js";
-import { prepareSpeech } from "../../../packages/adapters/src/speech-plan.js";
 import { TrayService } from "../../../packages/adapters/src/tray.js";
 import { WorkStore } from "../../../packages/adapters/src/work-store.js";
 import type { ComposerSnapshot } from "../../../packages/contracts/src/composer.js";
 import type { ApplicationConfig } from "../../../packages/contracts/src/config.js";
+import type { DesktopContext } from "../../../packages/contracts/src/desktop.js";
 import {
   type ClientCommand,
   clientCommand,
@@ -34,6 +42,7 @@ import {
   type ServerEvent,
 } from "../../../packages/contracts/src/protocol.js";
 import type { SettingsSnapshot } from "../../../packages/contracts/src/settings.js";
+import type { WaitingClip } from "../../../packages/contracts/src/speech.js";
 import type { VoiceConfig } from "../../../packages/contracts/src/voice.js";
 import { characterInstructions } from "../../../packages/domain/src/character.js";
 import {
@@ -47,6 +56,7 @@ import {
 import { type ConversationState, initialConversation, transition } from "../../../packages/domain/src/conversation.js";
 import { contextPrompt } from "../../../packages/domain/src/desktop.js";
 import { memoryInstructions } from "../../../packages/domain/src/memory.js";
+import { selectWaitingClip } from "../../../packages/domain/src/voice.js";
 import { CharacterController } from "./character.js";
 import { voiceSettingsStore } from "./config.js";
 import { DesktopController } from "./desktop.js";
@@ -116,7 +126,7 @@ class Host {
 
   constructor(
     private readonly database: Database,
-    private readonly chatDirectory: string,
+    chatDirectory: string,
     settings: SettingsSnapshot,
     characters: CharacterCatalog,
     private readonly config: ApplicationConfig,
@@ -136,7 +146,17 @@ class Host {
       chatDirectory,
       "codex",
       ["app-server", "--stdio"],
-      { ...this.chatOptions, restricted: true },
+      {
+        ...this.chatOptions,
+        restricted: true,
+        tools: [
+          desktopTool((screenshot, signal) => {
+            if (this.state.phase !== "thinking") throw new Error("对话已停止");
+            this.desktopReplyGeneration = this.state.generation;
+            return this.desktop.inspect(screenshot, signal);
+          }),
+        ],
+      },
     );
     this.character = new CharacterController(characters, {
       idle: () =>
@@ -164,15 +184,37 @@ class Host {
       store: this.desktopStore,
       publish: (desktop) => this.broadcast({ type: "desktop", desktop }),
       present: () => [...this.presence.values()].some((idle) => !idle),
-      idle: () => !this.character.changing && this.state.phase === "idle" && this.voice.snapshot.phase === "idle",
-      suggest: (context, signal) =>
-        suggestDesktop(chatDirectory, context, signal, {
-          home: this.codexHome,
-          model: {
-            model: config.screen_awareness.precheck_model,
-            reasoningEffort: config.screen_awareness.precheck_reasoning_effort,
+      idle: () =>
+        !this.character.changing &&
+        !this.settings.snapshot.busy &&
+        this.state.phase === "idle" &&
+        this.voice.snapshot.phase === "idle" &&
+        !this.voice.snapshot.continuous &&
+        canAutoSubmit(this.composer),
+      suggest: (context, signal, images) =>
+        suggestDesktop(
+          chatDirectory,
+          context,
+          signal,
+          {
+            home: this.codexHome,
+            model: {
+              model: config.screen_awareness.precheck_model,
+              reasoningEffort: config.screen_awareness.precheck_reasoning_effort,
+            },
           },
-        }),
+          images,
+        ),
+      offer: (context) => {
+        void this.sendMessage(
+          "这是一次已授权的主动桌面观察，并非用户发言。结合当前画面和对话决定是否自然搭一句话；不要提及观察机制，不要重复旧建议。没有合适的话题时返回 openingClipId=none、segments=[]。",
+          undefined,
+          undefined,
+          context,
+        ).catch((error: unknown) =>
+          this.broadcast({ type: "error", message: error instanceof Error ? error.message : "主动回应失败" }),
+        );
+      },
       revoked: () => {
         if (this.desktopReplyGeneration === this.state.generation) void this.stop();
       },
@@ -196,6 +238,7 @@ class Host {
   }
 
   private createVoice(voiceConfig: VoiceConfig): VoiceController {
+    const previousWaiting = new Map<string, WaitingClip>();
     const controller = new VoiceController(
       {
         capture: (signal, onLevel) => captureAudio(voiceConfig, signal, onLevel),
@@ -203,23 +246,19 @@ class Host {
           if (!voiceConfig.asr) throw new Error("未配置 ASR");
           return transcribe(wav, voiceConfig.asr, signal);
         },
-        prepareSpeech: async (text, signal) => {
-          const character = this.character.current;
-          const messages = await this.database.listMessages(this.character.binding.sessionId);
-          signal.throwIfAborted();
-          return prepareSpeech(
-            this.chatDirectory,
-            text,
-            JSON.stringify(messages.slice(-6).map(({ role, text }) => ({ role, text }))),
-            characterTts(voiceConfig.tts, character) ? this.config.speech.language : "zh",
-            character.speechReferences ?? [],
-            this.chatOptions,
-            signal,
-            character.portraitExpressions ?? [],
-          );
-        },
-        visualAvailable: () => !!this.character.current.portraitExpressions?.length,
         present: (segment) => this.character.present(segment.portraitId),
+        waitingClip: () => {
+          const character = this.character.current;
+          const clip = selectWaitingClip(
+            character.waitingClips ?? [],
+            previousWaiting.get(character.id),
+            Math.random(),
+          );
+          if (clip) previousWaiting.set(character.id, clip);
+          return clip;
+        },
+        interruptReply: () => this.codex.interrupt(),
+        recordedClip: (id) => this.character.current.replyClips?.find((clip) => clip.id === id)?.wav,
         synthesize: (text, signal, referenceId) => {
           const config = characterTts(voiceConfig.tts, this.character.current);
           if (!config) throw new Error("未配置 TTS");
@@ -590,16 +629,27 @@ class Host {
   private async prepareThread(character: Character, sessionId: string, signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted();
     const oldThread = await this.database.ensureSession(sessionId);
+    const replaceThread =
+      !!oldThread && (await this.database.ensureSession(sessionId, desktopToolProfile)) !== oldThread;
     const memories = await this.history.memories(character, sessionId);
     const recent = await this.database.listMessages(sessionId);
     signal?.throwIfAborted();
     const threadId = await this.codex.startThread(
       oldThread,
-      characterInstructions(character.name, character.persona) + memoryInstructions(memories, sessionId),
+      characterInstructions(character.name, character.persona) +
+        memoryInstructions(memories, sessionId) +
+        replyInstructions(
+          this.config.speech.language,
+          character.speechReferences ?? [],
+          character.portraitExpressions ?? [],
+          character.replyClips ?? [],
+        ),
       JSON.stringify(recent.slice(-12).map(({ role, text }) => ({ role, text: text.slice(-2000) }))),
+      replaceThread,
     );
     signal?.throwIfAborted();
-    if (threadId !== oldThread) await this.database.setCodexThread(sessionId, threadId);
+    if (replaceThread || threadId !== oldThread)
+      await this.database.setCodexThread(sessionId, threadId, desktopToolProfile);
     return threadId;
   }
 
@@ -695,7 +745,12 @@ class Host {
     return this.sendMessage(value.text, value.desktopId ?? undefined, value);
   }
 
-  private async sendMessage(text: string, desktopId?: string, composed?: Submission): Promise<void> {
+  private async sendMessage(
+    text: string,
+    desktopId?: string,
+    composed?: Submission,
+    observed?: DesktopContext,
+  ): Promise<void> {
     if (this.character.changing || this.settings.snapshot.busy) throw new Error("正在更新对话上下文或设置，请稍候");
     if (this.state.phase !== "idle") throw new Error("请先停止当前回复");
     const binding = this.character.binding;
@@ -703,47 +758,74 @@ class Host {
     const voiceGeneration = this.voice.beginReply();
     this.state = transition(this.state, { type: "send" });
     const generation = this.state.generation;
-    if (desktopId) this.desktopReplyGeneration = generation;
+    if (desktopId || observed) this.desktopReplyGeneration = generation;
     this.broadcast({ type: "status", status: "thinking" });
     try {
       const oldThread = await this.database.ensureSession(binding.sessionId);
       const threadId = oldThread ?? (await this.prepareThread(character, binding.sessionId));
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
-      const shared = desktopId ? await this.desktop.share(desktopId) : undefined;
+      const shared = observed ?? (desktopId ? await this.desktop.share(desktopId) : undefined);
       shared?.signal.throwIfAborted();
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
       const prompt = shared ? contextPrompt(text, shared.context) : text;
-      const message = await this.database.addMessage(
-        binding.sessionId,
-        "user",
-        shared ? `${text}\n\n[附带桌面上下文]\n${shared.context}` : text,
-      );
+      const message = observed
+        ? undefined
+        : await this.database.addMessage(
+            binding.sessionId,
+            "user",
+            shared ? `${text}\n\n[附带桌面上下文]\n${shared.context}` : text,
+          );
       if (composed) this.updateComposer({ type: "consumed", submission: composed }, undefined, binding.sessionId);
-      this.broadcast({ type: "message", message });
+      if (message) this.broadcast({ type: "message", message });
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
-      const reply = await this.codex.run(
+      const format = replyFormat(
+        character.speechReferences ?? [],
+        character.portraitExpressions ?? [],
+        character.replyClips ?? [],
+      );
+      const stream = new ReplyStream(format);
+      let invalidStream = false;
+      const rawReply = await this.codex.run(
         threadId,
         prompt,
-        (delta) => {
+        (rawDelta) => {
           if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
+          if (invalidStream) return;
+          let delta: string;
+          try {
+            delta = stream.push(rawDelta);
+          } catch {
+            invalidStream = true;
+            return;
+          }
+          if (!delta) return;
+          this.voice.replyArriving();
           this.state = transition(this.state, { type: "delta", generation, text: delta });
           this.broadcast({ type: "delta", turnId: String(generation), text: delta });
         },
         shared?.imageUrl ? [shared.imageUrl] : [],
+        format.schema,
       );
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
+      if (invalidStream) throw new Error("回复格式无效，请重试；未播放未校验的语音");
+      const segments = parseReply(rawReply, format);
+      const reply = replyText(segments);
       if (reply.trim()) {
         const assistantMessage = await this.database.addMessage(binding.sessionId, "assistant", reply);
         this.broadcast({ type: "message", message: assistantMessage });
         if (this.state.phase === "thinking" && this.state.generation === generation)
-          await this.voice.speak(reply, voiceGeneration);
+          await this.voice.speak(segments, voiceGeneration);
       } else {
-        await this.voice.speak("", voiceGeneration);
+        await this.voice.speak([], voiceGeneration);
       }
     } catch (error) {
       if (this.state.phase === "thinking" && this.state.generation === generation) {
-        this.broadcast({ type: "error", message: error instanceof Error ? error.message : String(error) });
-        await this.voice.cancel(error instanceof Error ? error.message : String(error));
+        if (this.voice.wasInterrupted(voiceGeneration)) {
+          await this.voice.speak([], voiceGeneration);
+        } else {
+          this.broadcast({ type: "error", message: error instanceof Error ? error.message : String(error) });
+          await this.voice.cancel(error instanceof Error ? error.message : String(error));
+        }
       }
     } finally {
       if (this.desktopReplyGeneration === generation) this.desktopReplyGeneration = null;

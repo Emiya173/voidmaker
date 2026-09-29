@@ -1,15 +1,16 @@
 import type { VoiceAudioSession } from "../../../packages/adapters/src/aec-session.js";
 import type { Capture, PlaybackProgress } from "../../../packages/adapters/src/audio-process.js";
-import type { SpeechSegment } from "../../../packages/contracts/src/speech.js";
+import type { SpeechSegment, WaitingClip } from "../../../packages/contracts/src/speech.js";
 import type { VoiceSnapshot } from "../../../packages/contracts/src/voice.js";
-import { initialVoice, speechSegments, type VoiceEvent, voiceTransition } from "../../../packages/domain/src/voice.js";
+import { initialVoice, type VoiceEvent, voiceTransition } from "../../../packages/domain/src/voice.js";
 
 export type VoicePorts = Readonly<{
   capture: (signal: AbortSignal, onLevel: (level: number) => void) => Capture;
   transcribe: (wav: Buffer, signal: AbortSignal) => Promise<string>;
-  prepareSpeech?: (text: string, signal: AbortSignal) => Promise<readonly SpeechSegment[]>;
-  visualAvailable?: () => boolean;
   present?: (segment: SpeechSegment) => void;
+  waitingClip?: () => WaitingClip | undefined;
+  recordedClip?: (id: string) => Buffer | undefined;
+  interruptReply?: () => Promise<void>;
   synthesize: (text: string, signal: AbortSignal, referenceId?: string) => Promise<Buffer>;
   play: (wav: Buffer, signal: AbortSignal, onProgress: (progress: PlaybackProgress) => void) => Promise<void>;
   submit: (text: string) => Promise<void>;
@@ -27,6 +28,9 @@ export class VoiceController {
   private audioAbort: AbortController | undefined;
   private session: VoiceAudioSession | undefined;
   private closing: Promise<void> = Promise.resolve();
+  private waiting: { controller: AbortController; timer: NodeJS.Timeout; pending: Promise<void> } | undefined;
+  private lastWaiting = -Infinity;
+  private interruptedGeneration = -1;
 
   constructor(
     private readonly ports: VoicePorts,
@@ -144,33 +148,113 @@ export class VoiceController {
 
   beginReply(): number {
     if (!["idle", "review"].includes(this.state.phase)) throw new Error("语音处理尚未结束");
-    return this.begin("thinking", this.state.continuous);
+    const generation = this.begin("thinking", this.state.continuous);
+    if (this.ports.waitingClip && this.snapshot.outputAvailable && Date.now() - this.lastWaiting >= 30_000) {
+      const waiting = {
+        controller: new AbortController(),
+        timer: setTimeout(() => {
+          waiting.pending = this.playWaiting(generation, waiting.controller.signal);
+        }, 2000),
+        pending: Promise.resolve(),
+      };
+      this.waiting = waiting;
+    }
+    return generation;
   }
-  async speak(text: string, generation: number): Promise<void> {
+  replyArriving(): void {
+    if (!this.waiting) return;
+    clearTimeout(this.waiting.timer);
+    this.waiting.controller.abort();
+  }
+  wasInterrupted(generation: number): boolean {
+    return this.interruptedGeneration === generation;
+  }
+  private async finishWaiting(): Promise<void> {
+    const waiting = this.waiting;
+    this.replyArriving();
+    await waiting?.pending;
+    if (this.waiting === waiting) this.waiting = undefined;
+  }
+  private async playWaiting(generation: number, waitingSignal: AbortSignal): Promise<void> {
+    const signal = AbortSignal.any([this.controller.signal, waitingSignal]);
+    let unwatch: (() => void) | undefined;
+    try {
+      if (
+        signal.aborted ||
+        !this.current(generation) ||
+        this.state.phase !== "thinking" ||
+        !this.snapshot.outputAvailable
+      )
+        return;
+      const clip = this.ports.waitingClip?.();
+      if (!clip) return;
+      this.lastWaiting = Date.now();
+      this.dispatch({ type: "stage", generation, phase: "speaking", subtitle: clip.subtitle });
+      if (this.state.continuous && this.bargeIn && this.session) {
+        unwatch = this.session.watchBarge(signal, () => {
+          if (signal.aborted || !this.current(generation)) return;
+          this.interruptedGeneration = generation;
+          this.replyArriving();
+          this.dispatch({ type: "stage", generation, phase: "interrupting", subtitle: "" });
+          void this.ports.interruptReply?.().catch(() => undefined);
+        });
+      }
+      await this.ports.play(clip.wav, signal, (progress) => {
+        if (!signal.aborted) this.dispatch({ type: "progress", generation, ...progress });
+      });
+    } catch {
+      // Optional recorded acknowledgement must never fail the actual model reply.
+    } finally {
+      unwatch?.();
+      if (this.current(generation) && this.state.phase === "speaking")
+        this.dispatch({ type: "stage", generation, phase: "thinking", subtitle: "" });
+    }
+  }
+  async speak(segments: readonly SpeechSegment[], generation: number): Promise<void> {
     if (!this.current(generation)) return;
-    this.pending = this.speakTurn(text, generation);
+    this.pending = this.speakTurn(segments, generation);
     await this.pending;
   }
-  private async speakTurn(text: string, generation: number): Promise<void> {
+  private async speakTurn(segments: readonly SpeechSegment[], generation: number): Promise<void> {
+    const prefetch = new AbortController();
+    const signal = AbortSignal.any([this.controller.signal, prefetch.signal]);
+    type Prepared = { ok: true; wav: Buffer } | { ok: false; error: unknown };
+    // Capture rejections immediately, even when the next segment fails during playback.
+    const prepare = async (segment: SpeechSegment): Promise<Prepared> => {
+      try {
+        signal.throwIfAborted();
+        if (segment.clipId) {
+          const wav = this.ports.recordedClip?.(segment.clipId);
+          if (!wav) throw new Error("句首原声不可用");
+          return { ok: true, wav };
+        }
+        return { ok: true, wav: await this.ports.synthesize(segment.text, signal, segment.referenceId) };
+      } catch (error) {
+        return { ok: false, error };
+      }
+    };
+    let pending: Promise<Prepared> | undefined;
     try {
+      await this.finishWaiting();
+      if (!this.current(generation) || this.wasInterrupted(generation)) return;
       const audible = this.snapshot.outputAvailable;
-      if (audible || this.ports.visualAvailable?.()) {
-        const signal = this.controller.signal;
-        this.dispatch({ type: "stage", generation, phase: "synthesizing" });
-        const segments = this.ports.prepareSpeech
-          ? await this.ports.prepareSpeech(text, signal)
-          : speechSegments(text).map((subtitle) => ({ subtitle, text: subtitle, referenceId: "neutral" }));
+      if (segments.length) {
         if (!this.current(generation)) return;
         if (!audible) {
           const last = segments.at(-1);
           if (last) this.ports.present?.(last);
           return;
         }
-        for (const segment of segments) {
+        pending = prepare(segments[0] as SpeechSegment);
+        for (const [index, segment] of segments.entries()) {
           if (!this.current(generation)) return;
           this.dispatch({ type: "stage", generation, phase: "synthesizing", subtitle: segment.subtitle });
-          const wav = await this.ports.synthesize(segment.text, signal, segment.referenceId);
+          const prepared = await pending;
           if (!this.current(generation)) return;
+          if (!prepared?.ok) throw prepared?.error ?? new Error("缺少已合成音频");
+          const next = segments[index + 1];
+          // One synthesis at a time; overlap only the next sentence with current playback.
+          pending = next ? prepare(next) : undefined;
           this.ports.present?.(segment);
           this.dispatch({ type: "stage", generation, phase: "speaking" });
           const playback = new AbortController();
@@ -186,7 +270,7 @@ export class VoiceController {
                 })
               : undefined;
           try {
-            await this.ports.play(wav, AbortSignal.any([signal, playback.signal]), (progress) =>
+            await this.ports.play(prepared.wav, AbortSignal.any([signal, playback.signal]), (progress) =>
               this.dispatch({ type: "progress", generation, ...progress }),
             );
           } catch (error) {
@@ -201,6 +285,8 @@ export class VoiceController {
     } catch (error) {
       await this.fail(error, generation);
     } finally {
+      prefetch.abort();
+      await pending;
       if (this.current(generation)) this.dispatch({ type: "stage", generation, phase: "idle", subtitle: "" });
     }
   }
@@ -209,11 +295,12 @@ export class VoiceController {
   }
   async cancel(error?: string): Promise<void> {
     this.controller.abort();
+    const waiting = this.finishWaiting();
     const closed = this.closeSession();
     this.recording = undefined;
     this.dispatch(error === undefined ? { type: "cancel" } : { type: "cancel", error });
     const generation = this.state.generation;
-    await Promise.all([this.pending, closed]);
+    await Promise.all([this.pending, closed, waiting]);
     this.dispatch({ type: "stage", generation, phase: "idle" });
   }
 }

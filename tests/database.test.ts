@@ -12,6 +12,18 @@ const database = new Database(connectionString);
 afterAll(async () => database.close());
 
 describe.skipIf(!connectionString)("PostgreSQL persistence", () => {
+  it("upgrades thread capabilities without replacing conversation history and remembers the new profile", async () => {
+    await migrate(connectionString);
+    const id = randomUUID();
+    await database.ensureSession(id);
+    await database.addMessage(id, "user", "保留原会话");
+    await database.setCodexThread(id, "old-thread");
+    expect(await database.ensureSession(id, "desktop-tools-v1")).toBeNull();
+    expect(await database.ensureSession(id)).toBe("old-thread");
+    await database.setCodexThread(id, "new-thread", "desktop-tools-v1");
+    expect(await database.ensureSession(id, "desktop-tools-v1")).toBe("new-thread");
+    expect((await database.listMessages(id)).map((entry) => entry.text)).toEqual(["保留原会话"]);
+  });
   it("isolates character histories by definition revision while preserving the original default session", async () => {
     await migrate(connectionString);
     const id = `character-${randomUUID()}`;

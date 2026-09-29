@@ -7,6 +7,8 @@ let threadParams;
 let threadId = "thread";
 let threadNumber = 0;
 const threads = new Map();
+const toolRequests = new Map();
+let lastToolResult;
 const complete = (status = "completed") => notify("turn/completed", { threadId, turn: { id: String(turnId), status } });
 
 createInterface({ input: process.stdin }).on("line", (line) => {
@@ -27,7 +29,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     if (message.params.input[0].text === "crash") process.exit(2);
     if ((message.params.input[0].text === "wait" || message.params.input[0].text.startsWith("wait\n\n"))) return;
     if (message.params.input[0].text === "policy") {
-      notify("item/completed", { threadId, turnId: String(turnId), item: { type: "agentMessage", phase: "final_answer", text: JSON.stringify({threadParams, turnParams: message.params}) } });
+      const chatSchema = message.params.outputSchema?.properties?.segments?.items?.properties?.subtitle;
+      const policy = JSON.stringify(chatSchema ? {threadParams: {baseInstructions: threadParams.baseInstructions?.includes("LOCAL_MEMORY_FIXTURE") ? "LOCAL_MEMORY_FIXTURE" : ""}, turnParams: {threadId}} : {threadParams, turnParams: message.params});
+      const text = chatSchema ? JSON.stringify({openingClipId: "none", segments: [{subtitle: policy, text: "確認できたよ。", referenceId: "neutral", portraitId: "neutral"}]}) : policy;
+      notify("item/completed", { threadId, turnId: String(turnId), item: { type: "agentMessage", phase: "final_answer", text } });
       complete();
       return;
     }
@@ -35,17 +40,39 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       send({ id: "approval-1", method: "item/commandExecution/requestApproval", params: { threadId, turnId: String(turnId), command: "echo test" } });
       return;
     }
+    if (["tool", "tool_wrong_thread", "tool_bad_args", "desktop_tool"].includes(message.params.input[0].text)) {
+      const input = message.params.input[0].text;
+      const requestId = "dynamic-" + turnId;
+      const params = { threadId, turnId: String(turnId), callId: requestId, namespace: null, tool: "read_desktop", arguments: input === "tool_bad_args" ? { includeScreenshot: "invalid" } : { includeScreenshot: input === "desktop_tool" ? false : true } };
+      toolRequests.set(requestId, { ...params, host: input === "desktop_tool" });
+      send({ id: requestId, method: "item/tool/call", params: { ...params, threadId: input === "tool_wrong_thread" ? "stale-thread" : threadId } });
+      return;
+    }
+    if (message.params.input[0].text === "tool_result") {
+      notify("item/completed", { threadId, turnId: String(turnId), item: { type: "agentMessage", phase: "final_answer", text: JSON.stringify(lastToolResult) } });
+      complete(); return;
+    }
+    const structured = message.params.outputSchema?.properties?.segments;
+    const reply = structured ? JSON.stringify({ openingClipId: "none", segments: [{ subtitle: "你好", text: "こんにちは。", referenceId: message.params.input[0].text === "bad_reply" ? "missing" : "neutral", portraitId: "neutral" }] }) : "你好";
     const params = { threadId, turnId: String(turnId) };
     notify("item/started", { ...params, item: { type: "agentMessage", id: "comment", phase: "commentary" } });
     notify("item/agentMessage/delta", { ...params, itemId: "comment", delta: "internal progress" });
     notify("item/started", { ...params, item: { type: "agentMessage", id: "final", phase: "final_answer" } });
-    notify("item/agentMessage/delta", { ...params, itemId: "final", delta: "你好" });
-    notify("item/completed", { ...params, item: { type: "agentMessage", id: "final", phase: "final_answer", text: "你好" } });
+    for (let i = 0; i < reply.length; i += 5) notify("item/agentMessage/delta", { ...params, itemId: "final", delta: reply.slice(i, i + 5) });
+    notify("item/completed", { ...params, item: { type: "agentMessage", id: "final", phase: "final_answer", text: reply } });
     complete();
   }
   if (message.method === "turn/interrupt") {
     send({ id: message.id, result: {} });
     complete("interrupted");
+  }
+  if (toolRequests.has(message.id) && message.result) {
+    const params = toolRequests.get(message.id); toolRequests.delete(message.id);
+    lastToolResult = message.result;
+    const summary = JSON.stringify({ success: message.result.success, sawContext: message.result.contentItems.some(item => item.text?.includes("fixture desktop context")) });
+    const text = params.host ? JSON.stringify({ openingClipId: "none", segments: [{ subtitle: summary, text: "確認したよ。", referenceId: "neutral", portraitId: "neutral" }] }) : JSON.stringify(message.result);
+    notify("item/completed", { threadId: params.threadId, turnId: params.turnId, item: { type: "agentMessage", phase: "final_answer", text } });
+    notify("turn/completed", { threadId: params.threadId, turn: { id: params.turnId, status: "completed" } });
   }
   if (message.id === "approval-1" && message.result) {
     notify("item/completed", {

@@ -9,6 +9,7 @@ export async function suggestDesktop(
   context: string,
   signal: AbortSignal,
   options: CodexOptions = {},
+  images: readonly string[] = [],
 ): Promise<string> {
   const bound = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
   bound.throwIfAborted();
@@ -26,7 +27,12 @@ export async function suggestDesktop(
     bound.throwIfAborted();
     const thread = await client.startThread();
     bound.throwIfAborted();
-    const result = await client.run(thread, contextPrompt("判断是否需要一条桌面建议。", context), () => undefined);
+    const result = await client.run(
+      thread,
+      contextPrompt("判断是否需要一条桌面建议。", context),
+      () => undefined,
+      images,
+    );
     bound.throwIfAborted();
     const parsed = suggestionSchema.parse(JSON.parse(result));
     return parsed.speak ? parsed.text : "";

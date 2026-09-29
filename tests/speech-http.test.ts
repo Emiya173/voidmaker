@@ -59,7 +59,33 @@ it("validates GPT-SoVITS request and WAV response", async () => {
     media_type: "wav",
     text: "你好",
     ref_audio_path: "/model/ref.wav",
+    text_split_method: "cut1",
+    batch_size: 1,
+    top_k: 15,
+    top_p: 1,
+    temperature: 1,
+    repetition_penalty: 1.2,
   });
+});
+
+it("uses automatic language detection for Japanese dialogue containing English names and rejects invalid audio", async () => {
+  let payload: Record<string, unknown> = {};
+  let valid = true;
+  const url = await server(async (req, res) => {
+    let data = "";
+    for await (const chunk of req) data += chunk;
+    payload = JSON.parse(data);
+    res.end(valid ? wav : Buffer.from("not audio"));
+  });
+  const config = voiceConfigSchema.parse({
+    tts: { url, refAudioPath: "/ref.wav", promptText: "参考", textLanguage: "ja" },
+  });
+  await synthesize("今日は遊ぼう。", required(config.tts), new AbortController().signal);
+  expect(payload.text_lang).toBe("ja");
+  await synthesize("API を確認しよう。", required(config.tts), new AbortController().signal);
+  expect(payload.text_lang).toBe("auto");
+  valid = false;
+  await expect(synthesize("こんにちは。", required(config.tts), new AbortController().signal)).rejects.toThrow("WAV");
 });
 
 it("times out and cancels pending inference requests", async () => {
