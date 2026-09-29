@@ -34,7 +34,7 @@ async function fixture() {
       unlocked: vi.fn(async () => true),
     },
     store: {
-      start: vi.fn(async () => desktopPolicy.parse({})),
+      start: vi.fn(async () => ({ policy: desktopPolicy.parse({}), grants: noDesktopGrants })),
       save: vi.fn(async () => undefined),
       audit: vi.fn(async () => undefined),
     },
@@ -64,6 +64,28 @@ async function fixture() {
 }
 
 describe("desktop grants and observation", () => {
+  it("restores persistent grants, preserves them when temporary grants expire, and revokes them", async () => {
+    const f = await fixture();
+    await f.controller.grant("window", 15, true);
+    await f.controller.grant("media", 1);
+    f.advance(61_000);
+    await f.controller.tick();
+    expect(f.controller.snapshot.grants).toEqual({ window: -1, media: 0, region: 0 });
+    await f.controller.read("window");
+    expect(Date.parse(f.controller.snapshot.observations[0]?.expiresAt ?? "")).toBeGreaterThan(0);
+    f.ports.store.start.mockResolvedValue({
+      policy: desktopPolicy.parse({ proactive: true }),
+      grants: { window: -1, media: 0, region: 0 },
+    });
+    const restored = new DesktopController(f.directory, f.ports);
+    await restored.start(false);
+    expect(restored.snapshot.policy.proactive).toBe(true);
+    expect(restored.snapshot.grants.window).toBe(-1);
+    await restored.revoke();
+    expect(restored.snapshot.grants).toEqual(noDesktopGrants);
+    expect(restored.snapshot.policy.proactive).toBe(false);
+    await restored.close();
+  });
   it("updates the waiting message immediately after authorization and shutdown", async () => {
     const f = await fixture();
     await f.controller.configure(desktopPolicy.parse({ proactive: true }));

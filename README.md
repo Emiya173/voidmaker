@@ -7,6 +7,7 @@
 ## 当前可用范围
 
 - 独立 TypeScript Host，经 Unix socket 连接新的 Quickshell 界面。
+- 两级陪伴／沉浸界面、左侧可编辑转写与纯文字回复气泡，见 [使用与实现说明](docs/UI_IMPLEMENTATION.md)。当前 IPC 为 v10，Host 与界面需一起更新。
 - 角色配置与切换、按角色隔离的历史/线程、立绘差分与播放音量驱动的基础口型，见 [角色说明](docs/CHARACTERS.md)。
 - Codex App Server 文字对话、最终回复流和停止生成；普通聊天只处理提供的上下文。
 - PostgreSQL 保存消息与 Codex 线程引用，Host/UI 重启后恢复历史。
@@ -80,7 +81,11 @@ quickshell --path apps/shell/shell.qml
 Host 的 socket 默认在 `$XDG_RUNTIME_DIR/voidmaker/host.sock`，也可通过 `VOIDMAKER_SOCKET` 覆盖。
 UI 重载或退出不会停止 Host；最后一个 UI 断开时停止语音并退出连续模式。普通聊天线程使用只读沙箱；需要进一步权限时在 UI 中允许或拒绝。
 聊天工作目录为 `$XDG_STATE_HOME/voidmaker/chat`（默认 `~/.local/state/voidmaker/chat`），
-避免把应用源码目录作为日常聊天上下文。Codex 仍使用当前用户的登录与全局配置。
+避免把应用源码目录作为日常聊天上下文。模型配置读取 `~/.config/voidmaker/config.toml`，见
+[配置示例](docs/config.example.toml)：聊天及朗读台词使用 `gpt-6-sol / medium`，主动观察使用 `gpt-6-luna / high`。
+引擎使用独立的 `$XDG_STATE_HOME/voidmaker/codex`，仅通过 `auth.json` 链接复用已有登录，
+不继承全局 Codex 的配置、角色指令或会话。无文件登录时可用该 `CODEX_HOME` 单独登录。
+恢复旧聊天线程失败时，会从 VoidMaker 数据库注入近期记录与已启用记忆，显示历史保留。
 全局快捷键和位置由 niri 配置；新面板使用 layer-shell 屏幕锚点。
 
 [systemd 用户服务模板](docs/voidmaker-host.service)可用于常驻运行，安装前需按实际仓库目录调整

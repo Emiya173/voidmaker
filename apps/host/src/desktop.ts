@@ -12,6 +12,7 @@ import {
   type DesktopSource,
   desktopPolicy,
   noDesktopGrants,
+  persistentDesktopGrant,
 } from "../../../packages/contracts/src/desktop.js";
 import { excludedApp, hasDesktopGrant, observationPause } from "../../../packages/domain/src/desktop.js";
 
@@ -73,7 +74,19 @@ export class DesktopController {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     for (const file of await readdir(this.directory))
       if (/^capture-[0-9a-f-]{36}\.png$/.test(file)) await unlink(join(this.directory, file));
-    this.policy = await this.ports.store.start();
+    const saved = await this.ports.store.start();
+    this.policy = saved.policy;
+    this.grants = saved.grants;
+    this.nextCheckAt = this.now() + this.policy.intervalSeconds * 1000;
+    this.pauseReason =
+      observationPause(
+        this.policy,
+        this.grants,
+        this.now(),
+        new Date(this.now()).getHours(),
+        this.ports.present(),
+        this.ports.idle(),
+      ) || "等待下一次观察";
     if (schedule)
       this.timer = setInterval(() => {
         void this.tick().catch((error) => {
@@ -133,10 +146,10 @@ export class DesktopController {
     this.mutations = job.catch(() => undefined);
     return job;
   }
-  grant(source: DesktopSource, minutes: number): Promise<void> {
+  grant(source: DesktopSource, minutes: number, persistent = false): Promise<void> {
     return this.change("grant", () => ({
       policy: this.policy,
-      grants: { ...this.grants, [source]: this.now() + minutes * 60_000 },
+      grants: { ...this.grants, [source]: persistent ? persistentDesktopGrant : this.now() + minutes * 60_000 },
     }));
   }
   revoke(source?: DesktopSource): Promise<void> {
@@ -231,7 +244,11 @@ export class DesktopController {
             region: "Wayland · slurp + grim",
           }[source],
           capturedAt: new Date(this.now()).toISOString(),
-          expiresAt: new Date(Math.min(this.now() + 300_000, this.grants[source])).toISOString(),
+          expiresAt: new Date(
+            this.grants[source] === persistentDesktopGrant
+              ? this.now() + 300_000
+              : Math.min(this.now() + 300_000, this.grants[source]),
+          ).toISOString(),
           text,
           ...(imagePath ? { imageUrl: pathToFileURL(imagePath).href } : {}),
         },
@@ -275,9 +292,9 @@ export class DesktopController {
       await this.change("expire", () => ({
         policy: this.policy,
         grants: {
-          window: this.grants.window > now ? this.grants.window : 0,
-          media: this.grants.media > now ? this.grants.media : 0,
-          region: this.grants.region > now ? this.grants.region : 0,
+          window: hasDesktopGrant(this.grants, "window", now) ? this.grants.window : 0,
+          media: hasDesktopGrant(this.grants, "media", now) ? this.grants.media : 0,
+          region: hasDesktopGrant(this.grants, "region", now) ? this.grants.region : 0,
         },
       }));
       return;

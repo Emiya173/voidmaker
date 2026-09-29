@@ -8,6 +8,7 @@ ScrollView {
     property bool online: false
     property bool canSend: false
     signal command(var value)
+    signal attach(string id)
     clip: true
     contentWidth: availableWidth
     function configure(enabled) {
@@ -30,21 +31,26 @@ ScrollView {
         Label { text: "桌面上下文"; color: "#f1f2f7"; font.pixelSize: 18; font.bold: true }
         Label {
             Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#bbc5dc"
-            text: "授权后可读取并预览；点击发送才会附带给 Codex。截图每次手动框选，不读取剪贴板。撤销会停止相关回复，但无法撤回已经发送的数据。"
+            text: "授权后可读取并预览。常驻开关会保存；截图仍由你手动框选。"
         }
         Repeater {
             model: [{source: "window", name: "窗口（当前 / 最近聚焦）"}, {source: "media", name: "媒体信息"}, {source: "region", name: "框选截图"}]
             delegate: ColumnLayout {
                 required property var modelData
                 readonly property double expiry: panel.snapshot ? panel.snapshot.grants[modelData.source] : 0
+                readonly property bool granted: expiry === -1 || expiry > Date.now()
                 Layout.fillWidth: true
-                Label { color: "#f1f2f7"; text: modelData.name + (expiry > 0 ? " · 授权至 " + new Date(expiry).toLocaleTimeString() : " · 未授权") }
+                Label { color: "#f1f2f7"; text: modelData.name; Layout.fillWidth: true; wrapMode: Text.Wrap }
+                ToggleSwitch { objectName: "persistentGrant-" + modelData.source
+                    text: "常驻授权"; checked: !!panel.snapshot && panel.snapshot.grants[modelData.source] === -1
+                    enabled: panel.online && !!panel.snapshot && !panel.snapshot.busy
+                    onClicked: panel.command(checked ? {type: "desktop_grant", source: modelData.source, persistent: true} : {type: "desktop_revoke", source: modelData.source}) }
                 RowLayout {
                     Button { text: "授权 15 分钟"; enabled: panel.online && (!panel.snapshot || !panel.snapshot.busy)
                         onClicked: panel.command({type: "desktop_grant", source: modelData.source, minutes: 15}) }
-                    Button { text: modelData.source === "region" ? "框选并预览" : "读取并预览"; enabled: panel.online && expiry > 0 && !panel.snapshot.busy
+                    Button { text: modelData.source === "region" ? "框选预览" : "读取预览"; enabled: panel.online && granted && !panel.snapshot.busy
                         onClicked: panel.command({type: "desktop_read", source: modelData.source}) }
-                    Button { text: "撤销"; enabled: panel.online && expiry > 0
+                    Button { text: "撤销"; enabled: panel.online && granted
                         onClicked: panel.command({type: "desktop_revoke", source: modelData.source}) }
                 }
             }
@@ -62,14 +68,17 @@ ScrollView {
                 Label { Layout.fillWidth: true; color: "#f1f2f7"; text: modelData.text; textFormat: Text.PlainText; wrapMode: Text.Wrap }
                 Image { Layout.fillWidth: true; Layout.preferredHeight: visible ? 180 : 0; visible: !!modelData.imageUrl; source: modelData.imageUrl || ""; fillMode: Image.PreserveAspectFit; cache: false }
                 TextField { id: question; Layout.fillWidth: true; placeholderText: "针对这份上下文提问"; maximumLength: 10000 }
-                Button { text: "确认发送给 Codex"; enabled: panel.canSend && question.text.trim().length > 0
+                Button { text: "附加到文字草稿"; enabled: panel.online; onClicked: panel.attach(modelData.id) }
+                Button { text: "发送"; enabled: panel.canSend && question.text.trim().length > 0
                     onClicked: { panel.command({type: "desktop_send", id: modelData.id, text: question.text.trim()}); question.clear() } }
             }
         }
         Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: "#343b50" }
-        Label { text: "主动观察（默认关闭）"; color: "#f1f2f7"; font.pixelSize: 18 }
+        ToggleSwitch { objectName: "proactiveSwitch"
+            text: "主动观察"; checked: !!panel.snapshot && panel.snapshot.policy.proactive; enabled: panel.online && !!panel.snapshot && !panel.snapshot.busy
+            onClicked: panel.configure(checked) }
         Label { Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#bbc5dc"
-            text: "开启后，已授权的窗口 / 媒体文本会定期发送给 Codex。只显示建议，不执行任务、不自动截图或播报。界面离线、空闲、会话锁定或对话中暂停。重启后需重新开启及授权。" }
+            text: "定期分析已授权的窗口与媒体，开关重启后保留。锁屏、空闲或对话时暂停，不自动截图。" }
         RowLayout {
             Label { text: "间隔（秒）"; color: "#f1f2f7" }
             SpinBox { id: interval; from: 60; to: 3600; value: 300; stepSize: 60; editable: true }
@@ -83,9 +92,8 @@ ScrollView {
         Label { text: "排除窗口 app_id（每行一个，精确匹配）"; color: "#bbc5dc" }
         TextArea { id: excluded; Layout.fillWidth: true; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap; placeholderText: "org.keepassxc.KeePassXC" }
         RowLayout {
-            Button { text: panel.snapshot && panel.snapshot.policy.proactive ? "保存观察设置" : "确认开启主动观察"; enabled: panel.online
-                onClicked: panel.configure(true) }
-            Button { text: "关闭"; enabled: panel.online && !!panel.snapshot && panel.snapshot.policy.proactive; onClicked: panel.configure(false) }
+            Button { text: "保存时段与排除项"; enabled: panel.online
+                onClicked: panel.configure(!!panel.snapshot && panel.snapshot.policy.proactive) }
         }
         Label { Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#bbc5dc"; text: panel.snapshot ? panel.snapshot.pauseReason : "等待连接" }
         Label { Layout.fillWidth: true; wrapMode: Text.Wrap; color: "#f5a5a5"; text: panel.snapshot ? panel.snapshot.error : ""; textFormat: Text.PlainText; visible: text.length > 0 }

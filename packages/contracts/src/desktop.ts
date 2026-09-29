@@ -14,6 +14,8 @@ export const desktopPolicy = z.object({
 });
 export type DesktopPolicy = z.infer<typeof desktopPolicy>;
 export type DesktopGrants = Readonly<Record<DesktopSource, number>>;
+export const persistentDesktopGrant = -1;
+export const desktopGrants = z.object({ window: z.int().min(-1), media: z.int().min(-1), region: z.int().min(-1) });
 export const noDesktopGrants: DesktopGrants = { window: 0, media: 0, region: 0 };
 export type DesktopObservation = Readonly<{
   id: string;
@@ -36,7 +38,12 @@ export type DesktopSnapshot = Readonly<{
   nextCheckAt: number;
 }>;
 export const desktopCommands = [
-  z.object({ type: z.literal("desktop_grant"), source: desktopSource, minutes: z.int().min(1).max(60) }),
+  z.object({
+    type: z.literal("desktop_grant"),
+    source: desktopSource,
+    minutes: z.int().min(1).max(60).default(15),
+    persistent: z.boolean().default(false),
+  }),
   z.object({ type: z.literal("desktop_revoke"), source: desktopSource.optional() }),
   z.object({ type: z.literal("desktop_policy"), policy: desktopPolicy }),
   z.object({ type: z.literal("desktop_read"), source: desktopSource }),

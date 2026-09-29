@@ -18,6 +18,28 @@ afterEach(async () => {
 });
 
 describe("Codex App Server transport", () => {
+  it.each([
+    { model: "gpt-6-sol", reasoningEffort: "medium" as const, observer: false },
+    { model: "gpt-6-luna", reasoningEffort: "high" as const, observer: true },
+  ])("pins $model on start, resume and every turn", async ({ model, reasoningEffort, observer }) => {
+    const instance = new CodexAppServer(
+      async () => "decline",
+      process.cwd(),
+      process.execPath,
+      [join(process.cwd(), "tests/fixtures/fake-codex.mjs")],
+      { restricted: true, observer, model: { model, reasoningEffort } },
+    );
+    clients.push(instance);
+    await instance.start();
+    for (const existing of [null, "saved-thread"]) {
+      const thread = await instance.startThread(existing);
+      const policy = JSON.parse(await instance.run(thread, "policy", () => undefined));
+      expect(policy.threadParams.model).toBe(model);
+      expect(policy.threadParams.config.model_reasoning_effort).toBe(reasoningEffort);
+      expect(policy.turnParams.model).toBe(model);
+      expect(policy.turnParams.effort).toBe(reasoningEffort);
+    }
+  });
   it("applies character instructions on restricted start/resume without enabling tools", async () => {
     const instance = new CodexAppServer(
       async () => "decline",

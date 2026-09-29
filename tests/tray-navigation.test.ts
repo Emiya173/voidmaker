@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { voiceConfigSchema } from "../packages/contracts/src/voice.js";
+import { offscreenShell } from "./helpers/shell.js";
 
 it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
   "opens tray destinations in the real shell without losing unsaved settings",
@@ -13,10 +14,7 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
     await cp("apps/shell", dir, { recursive: true });
     // Offscreen Qt has no layer-shell backend. Keep the real views and handlers,
     // substituting only the window container and compositor-specific properties.
-    const source = (await readFile(join(dir, "shell.qml"), "utf8"))
-      .replaceAll("PanelWindow {", "FloatingWindow {")
-      .replace(/^\s*anchors \{ (left|right): true; bottom: true \}\s*$/gm, "")
-      .replace(/^\s*(margins \{|exclusionMode:|focusable:|mask:).*/gm, "");
+    const source = offscreenShell(await readFile(join(dir, "shell.qml"), "utf8"));
     const checks = `
     Timer { interval: 100; running: true; onTriggered: {
         settingsPanel.receive({type: "settings", settings: {revision: "test", config: ${JSON.stringify(voiceConfigSchema.parse({}))}, busy: false, error: "", canRestore: false}})
@@ -25,7 +23,7 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
         for (const page of Object.keys(pages)) {
             root.setVisibility(false)
             root.receive(JSON.stringify({type: "shell_visibility", action: "show", page: page}))
-            if (!root.interfaceVisible || tabs.currentIndex !== pages[page]) throw new Error("Wrong destination: " + page)
+            if (!root.interfaceVisible || (page === "chat" ? !root.companionExpanded || root.drawerPage !== "" : root.drawerPage !== (page === "diagnostics" ? "settings" : page))) throw new Error("Wrong destination: " + page)
             if (page === "settings" && settingsPanel.currentSection !== 0) throw new Error("Wrong config tab")
             if (page === "diagnostics" && settingsPanel.currentSection !== 1) throw new Error("Wrong diagnostics tab")
         }

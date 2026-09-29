@@ -2,7 +2,14 @@ import type { VoicePhase, VoiceSnapshot } from "../../contracts/src/voice.js";
 
 export type VoiceEvent =
   | { type: "begin"; phase: "preparing" | "listening" | "thinking"; continuous: boolean }
-  | { type: "stage"; generation: number; phase: VoicePhase; transcript?: string; subtitle?: string }
+  | {
+      type: "stage";
+      generation: number;
+      phase: VoicePhase;
+      transcript?: string;
+      subtitle?: string;
+      continuous?: boolean;
+    }
   | { type: "progress"; generation: number; position: number; duration: number; level: number }
   | { type: "level"; generation: number; level: number }
   | { type: "cancel"; error?: string };
@@ -59,6 +66,7 @@ export function voiceTransition(state: VoiceSnapshot, event: VoiceEvent): VoiceS
         phase: event.phase,
         transcript: event.transcript ?? state.transcript,
         subtitle: event.subtitle ?? state.subtitle,
+        continuous: event.continuous ?? state.continuous,
         level: 0,
       };
     case "progress":

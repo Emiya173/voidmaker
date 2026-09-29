@@ -4,6 +4,7 @@ import { createConnection, createServer, type Socket } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { openAecSession } from "../../../packages/adapters/src/aec-session.js";
+import { loadApplicationConfig, prepareCodexHome } from "../../../packages/adapters/src/application-config.js";
 import { inspectArtifact, projectPath } from "../../../packages/adapters/src/artifacts.js";
 import { captureAudio, playAudio } from "../../../packages/adapters/src/audio-process.js";
 import {
@@ -19,9 +20,13 @@ import { suggestDesktop } from "../../../packages/adapters/src/desktop-codex.js"
 import { DesktopStore } from "../../../packages/adapters/src/desktop-store.js";
 import { inspectAec, inspectDevices, inspectModel } from "../../../packages/adapters/src/diagnostics.js";
 import { HistoryStore } from "../../../packages/adapters/src/history-store.js";
+import { sessionActive } from "../../../packages/adapters/src/session.js";
 import { synthesize, transcribe } from "../../../packages/adapters/src/speech-http.js";
+import { prepareSpeech } from "../../../packages/adapters/src/speech-plan.js";
 import { TrayService } from "../../../packages/adapters/src/tray.js";
 import { WorkStore } from "../../../packages/adapters/src/work-store.js";
+import type { ComposerSnapshot } from "../../../packages/contracts/src/composer.js";
+import type { ApplicationConfig } from "../../../packages/contracts/src/config.js";
 import {
   type ClientCommand,
   clientCommand,
@@ -31,6 +36,14 @@ import {
 import type { SettingsSnapshot } from "../../../packages/contracts/src/settings.js";
 import type { VoiceConfig } from "../../../packages/contracts/src/voice.js";
 import { characterInstructions } from "../../../packages/domain/src/character.js";
+import {
+  type ComposerEvent,
+  canAutoSubmit,
+  compose,
+  initialComposer,
+  type Submission,
+  submission,
+} from "../../../packages/domain/src/composer.js";
 import { type ConversationState, initialConversation, transition } from "../../../packages/domain/src/conversation.js";
 import { contextPrompt } from "../../../packages/domain/src/desktop.js";
 import { memoryInstructions } from "../../../packages/domain/src/memory.js";
@@ -39,9 +52,10 @@ import { voiceSettingsStore } from "./config.js";
 import { DesktopController } from "./desktop.js";
 import { DiagnosticsController } from "./diagnostics.js";
 import { migrate } from "./migrate.js";
+import { SessionGuard } from "./session-guard.js";
 import { SettingsController } from "./settings.js";
 import { VoiceController } from "./voice.js";
-import { WorkManager } from "./work.js";
+import { WorkManager, workRunner } from "./work.js";
 
 const MAX_LINE_BYTES = 64 * 1024;
 const runtimeDirectory = process.env.XDG_RUNTIME_DIR;
@@ -61,6 +75,15 @@ async function socketIsActive(path: string): Promise<boolean> {
 
 class Host {
   private state: ConversationState = initialConversation;
+  private readonly composers = new Map<string, ComposerSnapshot>();
+  private readonly sessionGuard = new SessionGuard(sessionActive, async () => {
+    this.broadcast({ type: "error", message: "会话已锁定或不可用，已停止当前对话" });
+    try {
+      await this.stop();
+    } catch (error) {
+      this.broadcast({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    }
+  });
   private readonly clients = new Set<Socket>();
   private readonly approvals = new Map<
     string,
@@ -93,9 +116,11 @@ class Host {
 
   constructor(
     private readonly database: Database,
-    chatDirectory: string,
+    private readonly chatDirectory: string,
     settings: SettingsSnapshot,
     characters: CharacterCatalog,
+    private readonly config: ApplicationConfig,
+    private readonly codexHome: string,
   ) {
     this.work = new WorkManager(
       new WorkStore(process.env.DATABASE_URL),
@@ -104,13 +129,14 @@ class Host {
         console.error("后台任务:", message);
         this.broadcast({ type: "error", message });
       },
+      workRunner(this.chatOptions),
     );
     this.codex = new CodexAppServer(
       (method, params) => this.askApproval(method, params),
       chatDirectory,
       "codex",
       ["app-server", "--stdio"],
-      { restricted: true },
+      { ...this.chatOptions, restricted: true },
     );
     this.character = new CharacterController(characters, {
       idle: () =>
@@ -139,7 +165,14 @@ class Host {
       publish: (desktop) => this.broadcast({ type: "desktop", desktop }),
       present: () => [...this.presence.values()].some((idle) => !idle),
       idle: () => !this.character.changing && this.state.phase === "idle" && this.voice.snapshot.phase === "idle",
-      suggest: (context, signal) => suggestDesktop(chatDirectory, context, signal),
+      suggest: (context, signal) =>
+        suggestDesktop(chatDirectory, context, signal, {
+          home: this.codexHome,
+          model: {
+            model: config.screen_awareness.precheck_model,
+            reasoningEffort: config.screen_awareness.precheck_reasoning_effort,
+          },
+        }),
       revoked: () => {
         if (this.desktopReplyGeneration === this.state.generation) void this.stop();
       },
@@ -170,10 +203,42 @@ class Host {
           if (!voiceConfig.asr) throw new Error("未配置 ASR");
           return transcribe(wav, voiceConfig.asr, signal);
         },
-        synthesize: (text, signal) => {
+        prepareSpeech: async (text, signal) => {
+          const character = this.character.current;
+          const messages = await this.database.listMessages(this.character.binding.sessionId);
+          signal.throwIfAborted();
+          return prepareSpeech(
+            this.chatDirectory,
+            text,
+            JSON.stringify(messages.slice(-6).map(({ role, text }) => ({ role, text }))),
+            characterTts(voiceConfig.tts, character) ? this.config.speech.language : "zh",
+            character.speechReferences ?? [],
+            this.chatOptions,
+            signal,
+            character.portraitExpressions ?? [],
+          );
+        },
+        visualAvailable: () => !!this.character.current.portraitExpressions?.length,
+        present: (segment) => this.character.present(segment.portraitId),
+        synthesize: (text, signal, referenceId) => {
           const config = characterTts(voiceConfig.tts, this.character.current);
           if (!config) throw new Error("未配置 TTS");
-          return synthesize(text, config, signal);
+          const reference = this.character.current.speechReferences?.find((entry) => entry.id === referenceId);
+          return synthesize(
+            text,
+            {
+              ...config,
+              ...(reference
+                ? {
+                    refAudioPath: reference.refAudioPath,
+                    promptText: reference.promptText,
+                    promptLanguage: reference.promptLanguage,
+                  }
+                : {}),
+              textLanguage: this.config.speech.language,
+            },
+            signal,
+          );
         },
         play: (wav, signal, onProgress) =>
           playAudio(
@@ -185,9 +250,13 @@ class Host {
               : {},
           ),
         ...(voiceConfig.aec ? { openSession: (signal: AbortSignal) => openAecSession(voiceConfig, signal) } : {}),
-        submit: (text) => this.sendMessage(text),
+        canAutoSubmit: () => canAutoSubmit(this.composer),
+        submit: () => this.sendComposer("transcript", this.voice.snapshot.generation),
         publish: (voice) => {
           if (this.voice !== controller) return;
+          if (["thinking", "listening", "preparing", "stopping"].includes(voice.phase)) this.character.present();
+          this.sessionGuard.setActive(!["idle", "review", "stopping"].includes(voice.phase));
+          this.updateComposer({ type: "voice", voice });
           this.broadcast({ type: "voice", voice });
           this.publishCharacter();
         },
@@ -199,8 +268,14 @@ class Host {
     return controller;
   }
 
+  private get chatOptions() {
+    return {
+      home: this.codexHome,
+      model: { model: this.config.agent.model, reasoningEffort: this.config.agent.reasoning_effort },
+    };
+  }
+
   async start(): Promise<void> {
-    this.tray.start();
     await this.work.start();
     await this.desktop.start();
     await this.codex.start();
@@ -208,9 +283,11 @@ class Host {
     await this.character.select(
       this.character.catalog.entries.some((entry) => entry.id === selected) ? selected : "default",
     );
+    this.tray.start();
   }
 
   async close(): Promise<void> {
+    this.sessionGuard.close();
     this.tray.close();
     this.diagnostics.cancel(false);
     await this.settings.close();
@@ -274,7 +351,36 @@ class Host {
             .join("；"),
       );
     const command = parsed.data;
+    if (
+      command.type.startsWith("composer_") &&
+      "sessionId" in command &&
+      command.sessionId !== this.character.binding.sessionId
+    )
+      throw new Error("会话已切换，请在当前会话重新编辑");
     switch (command.type) {
+      case "composer_edit":
+        try {
+          this.updateComposer({ ...command, type: "edit" }, command.requestId);
+        } catch (error) {
+          this.send(client, {
+            type: "composer",
+            sessionId: this.character.binding.sessionId,
+            composer: this.composer,
+            requestId: command.requestId,
+          });
+          throw error;
+        }
+        return;
+      case "composer_attach":
+        this.updateComposer({ type: "attach", id: command.id });
+        return;
+      case "composer_resolve":
+        this.updateComposer({ ...command, type: "resolve" });
+        if (this.voice.snapshot.phase === "review") await this.voice.cancel();
+        return;
+      case "composer_send":
+        await this.sendComposer(command.source, command.generation);
+        return;
       case "settings_get":
         this.send(client, { type: "settings", settings: this.settings.snapshot });
         this.send(client, { type: "diagnostics", diagnostics: this.diagnostics.snapshot });
@@ -325,7 +431,7 @@ class Host {
         return;
       }
       case "desktop_grant":
-        await this.desktop.grant(command.source, command.minutes);
+        await this.desktop.grant(command.source, command.minutes, command.persistent);
         return;
       case "desktop_revoke":
         await this.desktop.revoke(command.source);
@@ -392,11 +498,26 @@ class Host {
       case "stop":
         await this.stop();
         return;
-      case "voice_start":
+      case "voice_start": {
+        const generation = this.voice.snapshot.generation;
+        const voice = this.voice;
+        const binding = this.character.binding;
+        if (!(await sessionActive(AbortSignal.timeout(2000)))) throw new Error("会话已锁定或不活动，无法开始录音");
+        if (
+          this.voice !== voice ||
+          this.character.binding !== binding ||
+          this.voice.snapshot.generation !== generation ||
+          !this.clients.has(client)
+        )
+          throw new Error("录音请求已取消");
         if (this.character.changing || this.settings.snapshot.busy) throw new Error("正在更新对话上下文或设置，请稍候");
         if (this.state.phase !== "idle") throw new Error("请先停止当前回复");
+        if (this.composer.transcript) throw new Error("请先发送或放弃当前转写");
+        if (command.continuous && !canAutoSubmit(this.composer))
+          throw new Error("请先处理文字草稿和附加内容，再开启连续对话");
         this.voice.listen(command.continuous);
         return;
+      }
       case "voice_finish":
         this.voice.finish();
         return;
@@ -470,10 +591,12 @@ class Host {
     signal?.throwIfAborted();
     const oldThread = await this.database.ensureSession(sessionId);
     const memories = await this.history.memories(character, sessionId);
+    const recent = await this.database.listMessages(sessionId);
     signal?.throwIfAborted();
     const threadId = await this.codex.startThread(
       oldThread,
       characterInstructions(character.name, character.persona) + memoryInstructions(memories, sessionId),
+      JSON.stringify(recent.slice(-12).map(({ role, text }) => ({ role, text: text.slice(-2000) }))),
     );
     signal?.throwIfAborted();
     if (threadId !== oldThread) await this.database.setCodexThread(sessionId, threadId);
@@ -555,7 +678,24 @@ class Host {
     return true;
   }
 
-  private async sendMessage(text: string, desktopId?: string): Promise<void> {
+  private get composer(): ComposerSnapshot {
+    return this.composers.get(this.character.binding.sessionId) ?? initialComposer;
+  }
+
+  private updateComposer(event: ComposerEvent, requestId?: string, sessionId = this.character.binding.sessionId): void {
+    const previous = this.composers.get(sessionId) ?? initialComposer;
+    const composer = compose(previous, event);
+    this.composers.set(sessionId, composer);
+    if (composer !== previous || requestId)
+      this.broadcast({ type: "composer", sessionId, composer, ...(requestId ? { requestId } : {}) });
+  }
+
+  private sendComposer(source: "text" | "transcript", generation: number): Promise<void> {
+    const value = submission(this.composer, source, generation);
+    return this.sendMessage(value.text, value.desktopId ?? undefined, value);
+  }
+
+  private async sendMessage(text: string, desktopId?: string, composed?: Submission): Promise<void> {
     if (this.character.changing || this.settings.snapshot.busy) throw new Error("正在更新对话上下文或设置，请稍候");
     if (this.state.phase !== "idle") throw new Error("请先停止当前回复");
     const binding = this.character.binding;
@@ -578,6 +718,7 @@ class Host {
         "user",
         shared ? `${text}\n\n[附带桌面上下文]\n${shared.context}` : text,
       );
+      if (composed) this.updateComposer({ type: "consumed", submission: composed }, undefined, binding.sessionId);
       this.broadcast({ type: "message", message });
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
       const reply = await this.codex.run(
@@ -668,6 +809,7 @@ class Host {
   }
 
   private publishCharacter(): void {
+    this.tray.setCharacter(this.character.current.name, this.character.current.trayIcon);
     this.broadcast({
       type: "character",
       character: this.character.snapshot(this.voice.snapshot, this.state.phase === "thinking"),
@@ -687,6 +829,7 @@ class Host {
       draft: this.state.phase === "thinking" ? this.state.draft : "",
       voice: this.voice.snapshot,
       character: this.character.snapshot(this.voice.snapshot, this.state.phase === "thinking"),
+      composer: this.composer,
     });
   }
 
@@ -703,7 +846,14 @@ async function main(): Promise<void> {
   const chatDirectory = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state"), "voidmaker", "chat");
   await mkdir(chatDirectory, { recursive: true, mode: 0o700 });
   const database = new Database(process.env.DATABASE_URL);
-  const host = new Host(database, chatDirectory, await voiceSettingsStore().load(), await loadCharacters());
+  const host = new Host(
+    database,
+    chatDirectory,
+    await voiceSettingsStore().load(),
+    await loadCharacters(),
+    await loadApplicationConfig(),
+    await prepareCodexHome(),
+  );
   const server = createServer((client) => host.attach(client));
   try {
     await database.check();

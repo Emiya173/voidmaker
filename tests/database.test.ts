@@ -26,7 +26,7 @@ describe.skipIf(!connectionString)("PostgreSQL persistence", () => {
     expect(await database.selectedCharacter()).toBe(id);
     await database.selectCharacter("default");
   });
-  it("resets desktop grants and proactive mode on restart while retaining preferences", async () => {
+  it("restores persistent desktop grants and proactive mode but clears temporary grants", async () => {
     await migrate(connectionString);
     const store = new DesktopStore(connectionString);
     const client = new pg.Client({ connectionString });
@@ -35,14 +35,14 @@ describe.skipIf(!connectionString)("PostgreSQL persistence", () => {
       await store.start();
       await store.save(
         desktopPolicy.parse({ proactive: true, intervalSeconds: 120 }),
-        { ...noDesktopGrants, window: Date.now() + 60000 },
+        { ...noDesktopGrants, window: -1, media: Date.now() + 60000 },
         "grant",
       );
       const resumed = await store.start();
-      expect(resumed.proactive).toBe(false);
-      expect(resumed.intervalSeconds).toBe(120);
+      expect(resumed.policy.proactive).toBe(true);
+      expect(resumed.policy.intervalSeconds).toBe(120);
       const settings = await client.query("SELECT grants FROM desktop_settings WHERE id=true");
-      expect(settings.rows[0].grants).toEqual(noDesktopGrants);
+      expect(settings.rows[0].grants).toEqual({ ...noDesktopGrants, window: -1 });
       await store.audit("capture", "region", { id: "audit-test", bytes: 123, sha256: "test-hash" });
       const audit = await client.query(
         "SELECT detail FROM desktop_events WHERE kind='capture' ORDER BY id DESC LIMIT 1",

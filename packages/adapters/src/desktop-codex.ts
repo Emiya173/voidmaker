@@ -1,13 +1,19 @@
 import { z } from "zod";
 import { contextPrompt } from "../../domain/src/desktop.js";
-import { CodexAppServer } from "./codex.js";
+import { CodexAppServer, type CodexOptions } from "./codex.js";
 
 const suggestionSchema = z.object({ speak: z.boolean(), text: z.string().max(2000) });
 
-export async function suggestDesktop(cwd: string, context: string, signal: AbortSignal): Promise<string> {
+export async function suggestDesktop(
+  cwd: string,
+  context: string,
+  signal: AbortSignal,
+  options: CodexOptions = {},
+): Promise<string> {
   const bound = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
   bound.throwIfAborted();
   const client = new CodexAppServer(async () => "decline", cwd, "codex", ["app-server", "--stdio"], {
+    ...options,
     restricted: true,
     observer: true,
   });

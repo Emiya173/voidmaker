@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>VoidMaker · 七海主题</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M3 4h18v13H10l-5 4v-4H3zM7 9h10M7 13h7"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><path d="M9 3h6v11H9zM5 10v5l3 3h8l3-3v-5M12 18v3M8 21h8"/></symbol>
+    <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="M9 3h6v9M5 11v4l3 3h8M12 18v3M8 21h8M3 3l18 18"/></symbol>
+    <symbol id="i-work" viewBox="0 0 24 24"><path d="M4 3h16v18H4zM7 3v7h10V3M8 14h8v7M10 17v4M14 17v4"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7M12 5v15"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M9 3h6v6h6v6h-6v6H9v-6H3V9h6z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18M7 3v6M16 9v6M10 15v6"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 9h3V6h14v3h3v6h-3v3H5v-3H2zM10 9h4v6h-4z"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M5 5h15v15H5M3 3v6h6M3 9l4-4M12 8v5h5"/></symbol>
+    <symbol id="i-loop" viewBox="0 0 24 24"><path d="M4 8h14l-3-3M20 16H6l3 3M20 6v5M4 18v-5"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><path d="M3 3h18v18H3zM3 17l6-6 5 5 3-3 4 4M15 7h2"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M3 4h8l1 2 1-2h8v16h-8l-1 1-1-1H3zM12 6v15"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M8 6H4v6h4M16 12h4v6h-4M8 12h8M8 6v12M16 6v12"/></symbol>
+    <symbol id="i-cube" viewBox="0 0 24 24"><path d="m12 2 9 5v10l-9 5-9-5V7zM3 7l9 5 9-5M12 12v10M7 4.8l10 5.5"/></symbol>
+    <symbol id="i-game" viewBox="0 0 24 24"><path d="M6 5h12v3h3v11h-5v-4H8v4H3V8h3zM6 9v4M4 11h4M15 10h2M18 12h1"/></symbol>
+  </defs></svg>
+
+  <header class="review-bar" aria-label="原型评审工具">
+    <a class="review-brand" href="../../docs/CHIAKI_UI_THEME.md" title="主题研究"><svg><use href="#i-game"/></svg><span>VoidMaker <small>/ 七海</small></span></a>
+    <nav class="mode-switch" aria-label="展开层级"><button data-mode="companion" aria-pressed="false">01 <span>陪伴</span></button><button data-mode="immersive" aria-pressed="true">02 <span>沉浸</span></button></nav>
+    <div class="review-tools"><button id="appearance" class="renderer-switch" aria-label="角色显示：立绘，切换为 3D" title="切换角色显示"><svg><use href="#i-image"/></svg><span id="appearanceLabel">立绘</span></button><select id="scenario" aria-label="演示状态"><option value="idle">待机</option><option value="listening">聆听</option><option value="review">转写</option><option value="thinking">思考</option><option value="speaking">回应</option><option value="offline">离线</option><option value="error">语音故障</option></select></div>
+  </header>
+
+  <main id="stage" class="stage" data-mode="companion" data-phase="idle" data-appearance="portrait" data-companion-expanded="false">
+    <div class="desktop-bar" aria-hidden="true"><span>● <i></i> ○ <i></i> ○</span><span>21:08</span></div>
+    <section class="desktop-document" aria-label="模拟桌面窗口"><header><span class="window-dots">● ● ●</span><svg><use href="#i-book"/></svg></header><div class="paper-lines" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><button id="desktopTarget" class="icon-btn" data-tip="桌面点击示例" aria-label="测试桌面点击"><svg><use href="#i-plus"/></svg></button></section>
+
+    <div class="immersion-frame" aria-hidden="true"><div class="slant slant-one"></div><div class="slant slant-two"></div><div class="halftone"></div><div class="pixel-scatter"><i></i><i></i><i></i><i></i></div></div>
+    <header class="immersion-header"><button id="sessionButton" class="session-switch" aria-label="切换会话" data-tip="会话"><span class="pixel-mark"></span><span>七海千秋</span><svg><use href="#i-down"/></svg></button><nav aria-label="交流工具"><button id="historyToggle" class="icon-btn" aria-label="对话记录" data-tip="对话记录" aria-pressed="true"><svg><use href="#i-history"/></svg></button><button id="immersiveWork" class="icon-btn" aria-label="任务" data-tip="任务"><svg><use href="#i-work"/></svg><i id="workCount" class="notification" hidden></i></button><button id="immersiveSettings" class="icon-btn" aria-label="设置" data-tip="设置"><svg><use href="#i-settings"/></svg></button><button id="collapse" class="icon-btn" aria-label="收起" data-tip="收起"><svg><use href="#i-close"/></svg></button></nav></header>
+
+    <section class="character-zone" aria-label="七海千秋">
+      <div class="character-art"><img id="portrait" src=".local/portrait.png" alt="七海千秋本地立绘"><img id="modelPreview" src=".local/model-preview.png" alt="七海千秋现有 3D 模型的静态渲染预览"><div id="portraitFallback" class="character-fallback" hidden><svg><use href="#i-image"/></svg><span>载入立绘</span></div><div id="modelFallback" class="character-fallback" hidden><svg><use href="#i-cube"/></svg><span>3D 预览未载入</span></div></div>
+      <div id="compactBubble" class="compact-bubble" data-kind="reply" role="group" hidden>
+        <div id="compactTranscript" hidden><header class="compact-source" aria-hidden="true"><svg><use href="#i-mic"/></svg><span>待发送</span></header><textarea id="transcriptInput" aria-label="转写内容，可直接编辑" placeholder="输入要发送的内容…" rows="1" spellcheck="false"></textarea></div>
+        <p id="compactText" role="status" aria-live="polite" hidden></p>
+      </div>
+      <nav id="companionDock" class="companion-dock" aria-label="陪伴交互">
+        <button id="dockChat" class="icon-btn" aria-label="展开文字面板" data-tip="文字" aria-controls="chat" aria-expanded="false"><svg><use href="#i-chat"/></svg><i id="draftDot" class="notification" hidden></i></button>
+        <button id="dockMic" class="icon-btn" aria-label="开始说话" data-tip="说话"><svg><use href="#i-mic"/></svg></button>
+        <button id="dockSend" class="icon-btn" aria-label="发送转写" data-tip="发送转写" disabled><svg><use href="#i-arrow"/></svg></button>
+        <button id="dockWork" class="icon-btn" aria-label="任务" data-tip="任务"><svg><use href="#i-work"/></svg><i id="dockAttention" class="notification" hidden></i></button>
+        <button id="dockExpand" class="icon-btn" aria-label="展开沉浸交流" data-tip="沉浸交流"><svg><use href="#i-expand"/></svg></button>
+      </nav>
+      <span id="dockStatus" class="dock-status" role="status" aria-live="polite"></span>
+      <div class="character-caption" id="caption"><div class="nameplate"><span>七海千秋</span><span id="captionActivity" class="pixel-activity" aria-hidden="true"><i></i><i></i><i></i></span></div><p id="captionText">嗯，准备好了。<br>要一起开始吗？</p><span id="captionMeta" class="sr-only">上一句</span></div>
+    </section>
+
+    <section id="chat" class="chat-panel" aria-label="对话与输入">
+      <header class="chat-head"><span class="log-label">今天</span><span class="companion-label"><span class="pixel-mark" aria-hidden="true"></span>七海千秋</span><nav aria-label="对话工具"><button id="companionWork" class="icon-btn companion-only" aria-label="任务" data-tip="任务"><svg><use href="#i-work"/></svg><i id="attentionDot" class="notification" hidden></i></button><button id="companionSettings" class="icon-btn companion-only" aria-label="设置" data-tip="设置"><svg><use href="#i-settings"/></svg></button><button id="expand" class="icon-btn companion-only" aria-label="展开沉浸交流" data-tip="沉浸交流"><svg><use href="#i-expand"/></svg></button><button id="foldCompanion" class="icon-btn companion-only" aria-label="收起文字面板" data-tip="收起面板"><svg><use href="#i-close"/></svg></button><button class="icon-btn immersive-only" id="closeChat" data-tip="折叠记录" aria-label="折叠记录"><svg><use href="#i-close"/></svg></button></nav></header>
+      <div class="conversation" id="conversation" role="log" aria-label="对话记录" aria-live="polite">
+        <article class="message user" aria-label="你"><p>先整理一下文档。</p></article>
+        <article class="message assistant" aria-label="七海千秋"><p>我把范围列好了。</p><button class="task-link" id="taskLink"><svg><use href="#i-work"/></svg><span>文档索引</span><small>草稿</small><span aria-hidden="true">↗</span></button></article>
+        <article class="message user" aria-label="你"><p>先休息一下，陪我聊聊吧。</p></article>
+        <article class="message assistant" aria-label="七海千秋"><p>嗯，存个档吧。今天想聊些什么？</p></article>
+      </div>
+      <div class="chat-bottom"><div id="feedback" class="feedback" role="status" hidden></div><div id="contextChip" class="context-chip" hidden><svg><use href="#i-image"/></svg><span>截图 × 1</span><button id="removeContext" aria-label="移除截图">×</button></div><div class="composer"><textarea id="input" aria-label="消息或转写" placeholder="说点什么…" rows="2"></textarea><div class="composer-actions"><div><button class="icon-btn" id="attach" aria-label="附加内容" data-tip="附加内容"><svg><use href="#i-plus"/></svg></button><button id="voiceMode" class="icon-btn" aria-label="开启连续语音" data-tip="连续语音" aria-pressed="false"><svg><use href="#i-loop"/></svg></button></div><div><button class="icon-btn" id="mic" aria-label="开始说话" data-tip="说话"><svg><use href="#i-mic"/></svg></button><button class="send-button icon-btn" id="send" aria-label="发送" data-tip="发送"><svg><use href="#i-arrow"/></svg></button></div></div></div><div class="status-line"><span id="chatStatus" role="status"></span><span class="key-hint" title="Enter 发送；Shift + Enter 换行">↵</span></div></div>
+    </section>
+
+    <section id="workspace" class="workspace" aria-label="辅助面板" hidden><header class="workspace-head"><span id="workspaceTitle">任务</span><button class="icon-btn" id="closeWork" aria-label="关闭面板" data-tip="关闭"><svg><use href="#i-close"/></svg></button></header><div class="workspace-grid"><nav class="work-sidebar" aria-label="辅助功能"><button data-page="tasks" class="icon-btn active" aria-label="任务" data-tip="任务"><svg><use href="#i-work"/></svg></button><button data-page="sessions" class="icon-btn" aria-label="会话与记忆" data-tip="会话与记忆"><svg><use href="#i-history"/></svg></button><button data-page="settings" class="icon-btn" aria-label="设置" data-tip="设置"><svg><use href="#i-settings"/></svg></button><span class="sprite-wrap mini-sprite"><span class="sprite"><img src=".local/pixel.png" alt=""></span></span></nav><div class="workspace-content" id="workContent"></div></div></section>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <dialog id="contextDialog"><form method="dialog"><header><h2>截图预览</h2><button class="icon-btn" aria-label="关闭"><svg><use href="#i-close"/></svg></button></header><div class="context-preview" aria-label="模拟截图"><svg><use href="#i-image"/></svg><div class="paper-lines"><i></i><i></i><i></i></div></div><p>仅随下一条消息发送。</p><footer><button class="secondary" value="cancel">取消</button><button class="primary" id="confirmContext" value="attach">附加</button></footer></form></dialog>
+  </main>
+  <footer class="review-footer"><span>本地原型 · 模拟交互<span id="renderNote" hidden> · 3D 为现有模型静态预览</span></span><div><button id="assetLoad" aria-label="载入本地素材" title="可同时选择 pixel.png 与立绘 PNG">素材</button><a href="../../docs/CHIAKI_UI_THEME.md">主题依据 ↗</a><a href="../../docs/UI_HMI_REDESIGN.md">交互方案 ↗</a></div></footer>
+  <input type="file" id="assetInput" accept="image/png,image/webp" multiple hidden>
+</body>
+</html>

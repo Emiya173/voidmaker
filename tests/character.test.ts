@@ -50,6 +50,10 @@ it("loads layered local PNGs and a per-character reference without exposing pers
   await writeFile(join(directory, "demo", "idle.png"), png);
   await writeFile(join(directory, "demo", "ref.wav"), "audio fixture");
   await writeFile(
+    join(directory, "demo", "tray.json"),
+    JSON.stringify({ rows: [".a.", "aaa"], palette: { a: "#ff0011" } }),
+  );
+  await writeFile(
     join(directory, "demo", "character.json"),
     JSON.stringify({
       version: 1,
@@ -58,6 +62,8 @@ it("loads layered local PNGs and a per-character reference without exposing pers
       persona: "test",
       portraits: { idle: "idle.png", layered: true },
       voice: { reference: "ref.wav", promptText: "你好" },
+      portraitExpressions: [{ id: "gentle", description: "温柔回应", image: "idle.png" }],
+      trayIcon: "tray.json",
     }),
   );
   const catalog = await loadCharacters(directory);
@@ -65,6 +71,79 @@ it("loads layered local PNGs and a per-character reference without exposing pers
   expect(catalog.entries[1]?.layered).toBe(true);
   expect(catalog.entries[1]?.voice?.refAudioPath).toBe(join(directory, "demo", "ref.wav"));
   expect(catalog.entries[1]?.portraits.idle).toMatch(/^file:/);
+  expect(catalog.entries[1]?.portraitExpressions?.[0]).toMatchObject({
+    id: "gentle",
+    imageUrl: expect.stringMatching(/^file:/),
+  });
+  expect(catalog.entries[1]?.trayIcon?.rows).toEqual([".a.", "aaa"]);
+});
+
+it("keeps a character usable when contextual images or tray pixel data are invalid", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "voidmaker-expressions-"));
+  paths.push(directory);
+  await mkdir(join(directory, "demo"));
+  await writeFile(join(directory, "demo", "tray.json"), JSON.stringify({ rows: ["unknown"], palette: {} }));
+  await writeFile(
+    join(directory, "demo", "character.json"),
+    JSON.stringify({
+      version: 1,
+      id: "demo",
+      name: "Demo",
+      persona: "test",
+      trayIcon: "tray.json",
+      portraitExpressions: [{ id: "gentle", description: "温柔", image: "missing.png" }],
+    }),
+  );
+  const catalog = await loadCharacters(directory);
+  expect(catalog.entries[1]?.id).toBe("demo");
+  expect(catalog.entries[1]?.portraitExpressions).toBeUndefined();
+  expect(catalog.entries[1]?.trayIcon).toBeUndefined();
+  expect(catalog.warnings).toHaveLength(2);
+});
+
+it("uses contextual portraits without a stale base layer and resets when switching sessions", async () => {
+  const portrait = { id: "gentle", description: "温柔", imageUrl: "file:///gentle.png" };
+  const character = {
+    ...defaultCharacter,
+    portraits: { idle: "base" },
+    layered: true,
+    portraitExpressions: [portrait],
+  };
+  const publish = vi.fn();
+  const controller = new CharacterController(
+    { entries: [character], warnings: [] },
+    {
+      idle: () => true,
+      prepare: async (_character, _signal, sessionId) => ({ sessionId: sessionId ?? "s", threadId: "t" }),
+      persist: async () => {},
+      publish,
+    },
+  );
+  await controller.select("default");
+  const voice = initialVoice(false, false);
+  controller.present("gentle");
+  expect(controller.snapshot(voice, false).presentation).toMatchObject({
+    imageUrl: portrait.imageUrl,
+    baseUrl: "",
+    expressionId: "gentle",
+  });
+  const count = publish.mock.calls.length;
+  controller.present("gentle");
+  expect(publish).toHaveBeenCalledTimes(count);
+  expect(controller.snapshot({ ...voice, phase: "listening" }, false).presentation).toMatchObject({
+    baseUrl: "base",
+    imageUrl: "",
+  });
+  controller.present("invented");
+  expect(controller.snapshot(voice, false).presentation.expressionId).toBe("neutral");
+  controller.present("gentle");
+  await controller.select("default", "other-session");
+  expect(controller.snapshot(voice, false).presentation).toMatchObject({
+    imageUrl: "",
+    baseUrl: "base",
+    expressionId: "neutral",
+  });
+  await controller.close();
 });
 it("drives mouth only from playback PCM, resets on stop and ignores late progress", () => {
   let voice = initialVoice(true, true);

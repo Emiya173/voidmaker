@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { VoiceController, type VoicePorts } from "../apps/host/src/voice.js";
 import { readWav, wavFromPcm } from "../packages/adapters/src/pcm.js";
+import type { SpeechSegment } from "../packages/contracts/src/speech.js";
 import { voiceConfigSchema } from "../packages/contracts/src/voice.js";
 import { advanceVad, initialVad, initialVoice, voiceTransition } from "../packages/domain/src/voice.js";
 
@@ -26,10 +27,75 @@ function setup(overrides: Partial<VoicePorts> = {}, input = true, output = true)
 }
 
 describe("voice lifecycle", () => {
+  it("presents one contextual expression without enabling audio for a text-only character", async () => {
+    const first = { subtitle: "嗯。", text: "嗯。", referenceId: "neutral", portraitId: "thoughtful" };
+    const last = { subtitle: "一起试试看吧。", text: "一起试试看吧。", referenceId: "neutral", portraitId: "gentle" };
+    const { voice, ports } = setup(
+      {
+        visualAvailable: () => true,
+        prepareSpeech: async () => [first, last],
+        present: vi.fn(),
+      },
+      false,
+      false,
+    );
+    await voice.speak("嗯。一起试试看吧。", voice.beginReply());
+    expect(ports.present).toHaveBeenCalledExactlyOnceWith(last);
+    expect(ports.synthesize).not.toHaveBeenCalled();
+    expect(ports.play).not.toHaveBeenCalled();
+    expect(ports.capture).not.toHaveBeenCalled();
+    expect(voice.snapshot.phase).toBe("idle");
+  });
+  it("speaks Japanese with a selected reference while keeping Chinese subtitles", async () => {
+    const { voice, ports } = setup({
+      prepareSpeech: async () => [
+        { subtitle: "不用着急。", text: "焦らなくていいよ。", referenceId: "warm", portraitId: "gentle" },
+      ],
+      present: vi.fn(),
+    });
+    await voice.speak("不用着急。", voice.beginReply());
+    expect(ports.synthesize).toHaveBeenCalledWith("焦らなくていいよ。", expect.any(AbortSignal), "warm");
+    expect(ports.publish).toHaveBeenCalledWith(expect.objectContaining({ phase: "speaking", subtitle: "不用着急。" }));
+    expect(ports.present).toHaveBeenCalledWith(expect.objectContaining({ portraitId: "gentle" }));
+  });
+  it("does not synthesize or play a translation completed after cancellation", async () => {
+    const pending = deferred<readonly SpeechSegment[]>();
+    const { voice, ports } = setup({ prepareSpeech: () => pending.promise, present: vi.fn() });
+    const speaking = voice.speak("旧回复。", voice.beginReply());
+    const stopped = voice.cancel();
+    pending.resolve([{ subtitle: "旧回复。", text: "古い返事。", referenceId: "neutral", portraitId: "gentle" }]);
+    await Promise.all([speaking, stopped]);
+    expect(ports.synthesize).not.toHaveBeenCalled();
+    expect(ports.play).not.toHaveBeenCalled();
+    expect(ports.present).not.toHaveBeenCalled();
+    expect(voice.snapshot.phase).toBe("idle");
+  });
+  it("keeps text usable when speech preparation fails", async () => {
+    const { voice, ports } = setup({
+      prepareSpeech: async () => {
+        throw new Error("翻译服务离线");
+      },
+    });
+    await voice.speak("已显示的中文。", voice.beginReply());
+    expect(voice.snapshot.phase).toBe("idle");
+    expect(voice.snapshot.error).toBe("翻译服务离线");
+    expect(ports.synthesize).not.toHaveBeenCalled();
+  });
+  it("pauses continuous capture for draft conflicts instead of submitting unseen text", async () => {
+    const { voice, ports } = setup({ canAutoSubmit: () => false });
+    voice.listen(true);
+    await vi.waitFor(() => expect(voice.snapshot.phase).toBe("review"));
+    expect(voice.snapshot.continuous).toBe(false);
+    expect(voice.snapshot.transcript).toBe("测试文字");
+    expect(ports.submit).not.toHaveBeenCalled();
+    voice.resumeListening();
+    expect(ports.capture).toHaveBeenCalledOnce();
+    await voice.cancel();
+  });
   it("tracks role-specific speech availability and discards synthesis completed after stop", async () => {
     let enabled = false;
     const pending = deferred<Buffer>();
-    const { ports } = setup({ synthesize: () => pending.promise });
+    const { ports } = setup({ synthesize: () => pending.promise, present: vi.fn() });
     const voice = new VoiceController(ports, false, () => enabled);
     expect(voice.snapshot.outputAvailable).toBe(false);
     enabled = true;
@@ -40,6 +106,7 @@ describe("voice lifecycle", () => {
     pending.resolve(wav);
     await Promise.all([stopped, speaking]);
     expect(ports.play).not.toHaveBeenCalled();
+    expect(ports.present).not.toHaveBeenCalled();
     expect(voice.snapshot.phase).toBe("idle");
     expect(voice.snapshot.level).toBe(0);
     enabled = false;

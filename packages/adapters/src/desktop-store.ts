@@ -3,8 +3,10 @@ import {
   type DesktopGrants,
   type DesktopPolicy,
   type DesktopSource,
+  desktopGrants,
   desktopPolicy,
   noDesktopGrants,
+  persistentDesktopGrant,
 } from "../../contracts/src/desktop.js";
 
 export class DesktopStore {
@@ -12,11 +14,20 @@ export class DesktopStore {
   constructor(url?: string) {
     this.pool = new pg.Pool(url ? { connectionString: url } : undefined);
   }
-  async start(): Promise<DesktopPolicy> {
-    const rows = await this.pool.query<{ policy: unknown }>("SELECT policy FROM desktop_settings WHERE id=true");
-    const policy = { ...desktopPolicy.parse(rows.rows[0]?.policy ?? {}), proactive: false };
-    await this.save(policy, noDesktopGrants, "host_start");
-    return policy;
+  async start(): Promise<{ policy: DesktopPolicy; grants: DesktopGrants }> {
+    const rows = await this.pool.query<{ policy: unknown; grants: unknown }>(
+      "SELECT policy,grants FROM desktop_settings WHERE id=true",
+    );
+    const policy = desktopPolicy.parse(rows.rows[0]?.policy ?? {});
+    const saved = desktopGrants.parse(rows.rows[0]?.grants ?? noDesktopGrants);
+    const grants = Object.fromEntries(
+      Object.entries(saved).map(([source, value]) => [
+        source,
+        value === persistentDesktopGrant ? persistentDesktopGrant : 0,
+      ]),
+    ) as DesktopGrants;
+    await this.save(policy, grants, "host_start");
+    return { policy, grants };
   }
   async save(policy: DesktopPolicy, grants: DesktopGrants, kind: string): Promise<void> {
     const client = await this.pool.connect();

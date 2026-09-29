@@ -8,7 +8,10 @@ import {
   avatarManifest,
   type CharacterSummary,
   characterDefinition,
+  type PortraitExpression,
 } from "../../contracts/src/character.js";
+import type { SpeechReference } from "../../contracts/src/speech.js";
+import { type PixelIcon, pixelIcon } from "../../contracts/src/tray-icon.js";
 import type { VoiceConfig } from "../../contracts/src/voice.js";
 import type { Portraits } from "../../domain/src/character.js";
 import { assetPath, boundedFile } from "./character-assets.js";
@@ -20,8 +23,11 @@ export type Character = Readonly<{
   persona: string;
   revision: string;
   portraits: Portraits;
+  portraitExpressions?: readonly PortraitExpression[];
   layered: boolean;
+  trayIcon?: PixelIcon;
   avatar?: AvatarPresentation;
+  speechReferences?: readonly SpeechReference[];
   voice?: Readonly<Omit<NonNullable<VoiceConfig["tts"]>, "url" | "timeoutMs"> & { url?: string }>;
 }>;
 export type CharacterCatalog = Readonly<{ entries: readonly Character[]; warnings: readonly string[] }>;
@@ -95,6 +101,31 @@ export async function loadCharacters(
         }
       }
       let voice: Character["voice"];
+      let trayIcon: PixelIcon | undefined;
+      if (definition.trayIcon) {
+        try {
+          trayIcon = pixelIcon.parse(
+            JSON.parse((await boundedFile(await assetPath(root, definition.trayIcon), 16 * 1024)).toString("utf8")),
+          );
+        } catch {
+          warnings.push(`${definition.name}：托盘图标不可用，使用默认图标`);
+        }
+      }
+      const portraitExpressions: PortraitExpression[] = [];
+      for (const expression of definition.portraitExpressions ?? []) {
+        try {
+          if (expression.id === "neutral" || portraitExpressions.some((entry) => entry.id === expression.id))
+            throw new Error("立绘表情 id 重复");
+          portraitExpressions.push({
+            id: expression.id,
+            description: expression.description,
+            imageUrl: await portrait(root, expression.image),
+          });
+        } catch {
+          warnings.push(`${definition.name}：${expression.id} 表情立绘不可用，使用默认立绘`);
+        }
+      }
+      const speechReferences: SpeechReference[] = [];
       let avatar: AvatarPresentation | undefined;
       if (definition.avatar) {
         try {
@@ -160,6 +191,24 @@ export async function loadCharacters(
           textLanguage: definition.voice.textLanguage,
           ...(definition.voice.url ? { url: definition.voice.url } : {}),
         };
+        for (const reference of definition.voice.references ?? []) {
+          try {
+            if (reference.id === "neutral" || speechReferences.some((entry) => entry.id === reference.id))
+              throw new Error("参考音频 id 重复");
+            const refAudioPath = await assetPath(root, reference.reference);
+            const info = await stat(refAudioPath);
+            if (!info.isFile() || info.size > 32 * 1024 * 1024) throw new Error("参考音频无效");
+            speechReferences.push({
+              id: reference.id,
+              description: reference.description,
+              refAudioPath,
+              promptText: reference.promptText,
+              promptLanguage: reference.promptLanguage,
+            });
+          } catch {
+            warnings.push(`${definition.name}：${reference.id} 语气参考不可用，使用默认语气`);
+          }
+        }
       }
       entries.push({
         id: definition.id,
@@ -168,8 +217,11 @@ export async function loadCharacters(
         layered: definition.portraits?.layered ?? false,
         revision: createHash("sha256").update(JSON.stringify(definition)).digest("hex"),
         portraits,
+        ...(trayIcon ? { trayIcon } : {}),
+        ...(portraitExpressions.length ? { portraitExpressions } : {}),
         ...(avatar ? { avatar } : {}),
         ...(voice ? { voice } : {}),
+        ...(speechReferences.length ? { speechReferences } : {}),
       });
     } catch {
       warnings.push(`${name}：角色配置无效，已跳过`);

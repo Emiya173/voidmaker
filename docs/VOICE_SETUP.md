@@ -62,7 +62,15 @@ python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
 需准备有权使用的参考录音、准确转写和语言；`refAudioPath` 必须是**服务端可读取的绝对路径**。
 
 客户端按句发送 `/tts`，指定 `media_type=wav`、`streaming_mode=false`，校验 PCM 16-bit WAV 后播放。
-目前等待 Codex 最终回复，再顺序合成与播放各句；没有实现 LLM 生成期间的提前朗读或流式 TTS。
+等待最终中文回复后，通过独立临时线程生成逐段日语台词，并根据最近对话选择角色包中的参考音频。
+默认使用 `config.toml` 的对话模型；`[speech].language = "ja"`。翻译与参考 ID 经结构校验，
+中文字幕、历史记录不被日语替换。翻译失败保留文字并显示语音错误；取消会中断翻译、合成和播放。
+没有实现 LLM 生成期间的提前朗读或流式 TTS。
+
+角色包 `voice.references` 可提供 `id`、`description`、`reference`（包内 WAV 相对路径）、
+`promptText`（录音的准确台词）、`promptLanguage`。`neutral` 保留为默认录音，未知 ID 拒绝合成。
+语气由上下文和台词意图选择，不改变服务端权重。参考音频须符合 GPT-SoVITS 的时长约束，
+没有合适参考时使用默认音色；实际语气与自然度需听音验收。
 
 ## 2. 配置应用
 

@@ -26,6 +26,7 @@
     "dbus-next": "0.10.2",
     "drizzle-orm": "^0.44.0",
     "pg": "^8.16.0",
+    "smol-toml": "1.4.2",
     "zod": "^4.0.0"
   },
   "devDependencies": {

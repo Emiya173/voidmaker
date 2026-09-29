@@ -1,4 +1,9 @@
-import type { DesktopGrants, DesktopPolicy, DesktopSource } from "../../contracts/src/desktop.js";
+import {
+  type DesktopGrants,
+  type DesktopPolicy,
+  type DesktopSource,
+  persistentDesktopGrant,
+} from "../../contracts/src/desktop.js";
 
 type WindowFocus = Readonly<{
   is_focused: boolean;
@@ -19,7 +24,7 @@ export function selectDesktopWindow<T extends WindowFocus>(windows: readonly T[]
 }
 
 export function hasDesktopGrant(grants: DesktopGrants, source: DesktopSource, now: number): boolean {
-  return grants[source] > now;
+  return grants[source] === persistentDesktopGrant || grants[source] > now;
 }
 export function observationPause(
   policy: DesktopPolicy,

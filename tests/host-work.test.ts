@@ -75,7 +75,7 @@ it.skipIf(!url)(
       await once(socket, "connect");
       events = [];
       createInterface({ input: socket }).on("line", (line) => events.push(JSON.parse(line) as ServerEvent));
-      send({ type: "hello", version: 8 });
+      send({ type: "hello", version: 10 });
       await expect.poll(() => events.some((e) => e.type === "snapshot")).toBe(true);
     }
     function send(value: unknown) {
@@ -102,6 +102,49 @@ it.skipIf(!url)(
     try {
       start();
       await connect();
+      const initial = events.find((event) => event.type === "snapshot");
+      if (initial?.type !== "snapshot") throw new Error("missing initial snapshot");
+      expect(initial.composer.text).toBe("");
+      send({
+        type: "composer_edit",
+        sessionId: initial.sessionId,
+        source: "text",
+        generation: 0,
+        requestId: "draft-1",
+        text: "hello",
+      });
+      await expect
+        .poll(() =>
+          events.some(
+            (event) => event.type === "composer" && event.requestId === "draft-1" && event.composer.text === "hello",
+          ),
+        )
+        .toBe(true);
+      send({ type: "composer_send", sessionId: initial.sessionId, source: "text", generation: 0 });
+      await expect
+        .poll(() => events.some((event) => event.type === "message" && event.message.role === "assistant"))
+        .toBe(true);
+      await expect.poll(() => events.some((event) => event.type === "status" && event.status === "idle")).toBe(true);
+      expect(events.some((event) => event.type === "composer" && event.composer.text === "")).toBe(true);
+      send({
+        type: "composer_edit",
+        sessionId: initial.sessionId,
+        source: "text",
+        generation: 0,
+        requestId: "draft-2",
+        text: "保留的草稿",
+      });
+      await expect
+        .poll(() => events.some((event) => event.type === "composer" && event.requestId === "draft-2"))
+        .toBe(true);
+      send({ type: "composer_send", sessionId: "stale-session", source: "text", generation: 0 });
+      await expect
+        .poll(() => events.some((event) => event.type === "error" && event.message.includes("会话已切换")))
+        .toBe(true);
+      socket?.destroy();
+      await connect();
+      const reconnected = events.find((event) => event.type === "snapshot");
+      expect(reconnected?.type === "snapshot" && reconnected.composer.text).toBe("保留的草稿");
       const settings = events.find((e) => e.type === "settings");
       if (settings?.type !== "settings") throw new Error("missing settings");
       events = [];

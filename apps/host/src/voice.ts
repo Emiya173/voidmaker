@@ -1,14 +1,19 @@
 import type { VoiceAudioSession } from "../../../packages/adapters/src/aec-session.js";
 import type { Capture, PlaybackProgress } from "../../../packages/adapters/src/audio-process.js";
+import type { SpeechSegment } from "../../../packages/contracts/src/speech.js";
 import type { VoiceSnapshot } from "../../../packages/contracts/src/voice.js";
 import { initialVoice, speechSegments, type VoiceEvent, voiceTransition } from "../../../packages/domain/src/voice.js";
 
 export type VoicePorts = Readonly<{
   capture: (signal: AbortSignal, onLevel: (level: number) => void) => Capture;
   transcribe: (wav: Buffer, signal: AbortSignal) => Promise<string>;
-  synthesize: (text: string, signal: AbortSignal) => Promise<Buffer>;
+  prepareSpeech?: (text: string, signal: AbortSignal) => Promise<readonly SpeechSegment[]>;
+  visualAvailable?: () => boolean;
+  present?: (segment: SpeechSegment) => void;
+  synthesize: (text: string, signal: AbortSignal, referenceId?: string) => Promise<Buffer>;
   play: (wav: Buffer, signal: AbortSignal, onProgress: (progress: PlaybackProgress) => void) => Promise<void>;
   submit: (text: string) => Promise<void>;
+  canAutoSubmit?: () => boolean;
   publish: (state: VoiceSnapshot) => void;
   openSession?: (signal: AbortSignal) => Promise<VoiceAudioSession>;
 }>;
@@ -113,10 +118,15 @@ export class VoiceController {
       const text = await this.ports.transcribe(wav, signal);
       if (!this.current(generation)) return;
       if (!text) throw new Error("未识别出文字，请重试");
-      this.dispatch({ type: "stage", generation, phase: "review", transcript: text });
+      const automatic = this.state.continuous && (this.ports.canAutoSubmit?.() ?? true);
+      if (this.state.continuous && !automatic) await this.closeSession();
+      if (!this.current(generation)) return;
+      this.dispatch({ type: "stage", generation, phase: "review", transcript: text, continuous: automatic });
       if (this.state.continuous) {
         // submit owns the next generation; do not make cancel await the entire chat turn.
-        void this.ports.submit(text).catch((error: unknown) => this.fail(error, generation + 1));
+        const submitted = this.ports.submit(text);
+        const submittedGeneration = this.state.generation;
+        void submitted.catch((error: unknown) => this.fail(error, submittedGeneration));
       }
     } catch (error) {
       await this.fail(error, generation);
@@ -143,13 +153,25 @@ export class VoiceController {
   }
   private async speakTurn(text: string, generation: number): Promise<void> {
     try {
-      if (this.snapshot.outputAvailable) {
+      const audible = this.snapshot.outputAvailable;
+      if (audible || this.ports.visualAvailable?.()) {
         const signal = this.controller.signal;
-        for (const segment of speechSegments(text)) {
+        this.dispatch({ type: "stage", generation, phase: "synthesizing" });
+        const segments = this.ports.prepareSpeech
+          ? await this.ports.prepareSpeech(text, signal)
+          : speechSegments(text).map((subtitle) => ({ subtitle, text: subtitle, referenceId: "neutral" }));
+        if (!this.current(generation)) return;
+        if (!audible) {
+          const last = segments.at(-1);
+          if (last) this.ports.present?.(last);
+          return;
+        }
+        for (const segment of segments) {
           if (!this.current(generation)) return;
-          this.dispatch({ type: "stage", generation, phase: "synthesizing", subtitle: segment });
-          const wav = await this.ports.synthesize(segment, signal);
+          this.dispatch({ type: "stage", generation, phase: "synthesizing", subtitle: segment.subtitle });
+          const wav = await this.ports.synthesize(segment.text, signal, segment.referenceId);
           if (!this.current(generation)) return;
+          this.ports.present?.(segment);
           this.dispatch({ type: "stage", generation, phase: "speaking" });
           const playback = new AbortController();
           let interrupted = false;

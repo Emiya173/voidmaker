@@ -19,6 +19,7 @@ export class CharacterController {
   current: Character = defaultCharacter;
   binding: Binding = { sessionId: "", threadId: "" };
   changing = false;
+  private expressionId = "neutral";
   private readonly controller = new AbortController();
   private pending: Promise<void> = Promise.resolve();
   constructor(
@@ -33,10 +34,25 @@ export class CharacterController {
       changing: this.changing,
       warnings: this.catalog.warnings,
       presentation: {
-        ...characterPresentation(this.current.portraits, voice, thinking, this.current.layered),
+        ...characterPresentation(
+          this.current.portraits,
+          voice,
+          thinking,
+          this.current.layered,
+          this.current.portraitExpressions?.find((entry) => entry.id === this.expressionId)?.imageUrl,
+        ),
+        expressionId: this.expressionId,
         ...(this.current.avatar ? { avatar: this.current.avatar } : {}),
       },
     };
+  }
+  present(expressionId = "neutral"): void {
+    const next = this.current.portraitExpressions?.some((entry) => entry.id === expressionId)
+      ? expressionId
+      : "neutral";
+    if (next === this.expressionId) return;
+    this.expressionId = next;
+    this.ports.publish();
   }
   select(id: string, session?: string | (() => Promise<string>)): Promise<void> {
     this.controller.signal.throwIfAborted();
@@ -66,6 +82,7 @@ export class CharacterController {
     await this.ports.persist(character.id, binding);
     this.controller.signal.throwIfAborted();
     this.current = character;
+    this.expressionId = "neutral";
     this.binding = binding;
   }
   private async perform(effect: (signal: AbortSignal) => Promise<void>): Promise<void> {

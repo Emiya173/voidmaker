@@ -1,6 +1,8 @@
 import dbus from "dbus-next";
 import type { DiagnosticResult } from "../../contracts/src/settings.js";
 import type { TrayAction } from "../../contracts/src/shell.js";
+import type { PixelIcon } from "../../contracts/src/tray-icon.js";
+import { trayPixmaps } from "./tray-icon.js";
 import { TrayMenu, trayMenuPath } from "./tray-menu.js";
 
 const watcherName = "org.kde.StatusNotifierWatcher";
@@ -9,11 +11,11 @@ export const trayName = `org.kde.StatusNotifierItem-${process.pid}-1`;
 class TrayItem extends dbus.interface.Interface {
   readonly Category = "ApplicationStatus";
   readonly Id = "voidmaker";
-  readonly Title = "VoidMaker";
+  Title = "VoidMaker";
   readonly Status = "Active";
   readonly WindowId = 0;
-  readonly IconName = "face-smile";
-  readonly IconPixmap: unknown[] = [];
+  readonly IconName = "";
+  IconPixmap = trayPixmaps();
   readonly OverlayIconName = "";
   readonly OverlayIconPixmap: unknown[] = [];
   readonly AttentionIconName = "";
@@ -21,7 +23,9 @@ class TrayItem extends dbus.interface.Interface {
   readonly AttentionMovieName = "";
   readonly ItemIsMenu = false;
   readonly Menu = trayMenuPath;
-  readonly ToolTip = ["face-smile", [], "VoidMaker", "左键显示/隐藏；右键打开菜单"];
+  get ToolTip() {
+    return ["", this.IconPixmap, this.Title, "陪伴 · 交流"];
+  }
   constructor(private readonly activate: (action: TrayAction) => void) {
     super("org.kde.StatusNotifierItem");
   }
@@ -35,6 +39,19 @@ class TrayItem extends dbus.interface.Interface {
     this.activate({ type: "open", page: "settings" });
   }
   Scroll(): void {}
+  NewIcon(): void {}
+  NewToolTip(): void {}
+  update(name: string, icon?: PixelIcon): void {
+    this.Title = name === "VoidMaker" ? name : `${name} · VoidMaker`;
+    this.IconPixmap = trayPixmaps(icon);
+    dbus.interface.Interface.emitPropertiesChanged(
+      this,
+      { Title: this.Title, IconPixmap: this.IconPixmap, ToolTip: this.ToolTip },
+      [],
+    );
+    this.NewIcon();
+    this.NewToolTip();
+  }
 }
 TrayItem.configureMembers({
   properties: Object.fromEntries(
@@ -62,8 +79,12 @@ TrayItem.configureMembers({
     ContextMenu: { inSignature: "ii", outSignature: "" },
     Scroll: { inSignature: "is", outSignature: "" },
   },
+  signals: { NewIcon: { signature: "" }, NewToolTip: { signature: "" } },
 });
 export class TrayService {
+  private item: TrayItem | undefined;
+  private characterName = "VoidMaker";
+  private icon: PixelIcon | undefined;
   private bus: dbus.MessageBus | undefined;
   private closed = false;
   private generation = 0;
@@ -76,6 +97,12 @@ export class TrayService {
   constructor(private readonly activate: (action: TrayAction) => void) {}
   get status(): DiagnosticResult {
     return this.state;
+  }
+  setCharacter(name: string, icon?: PixelIcon): void {
+    if (name === this.characterName && icon === this.icon) return;
+    this.characterName = name;
+    this.icon = icon;
+    this.item?.update(name, icon);
   }
   start(): void {
     if (process.env.VOIDMAKER_TRAY === "0" || !process.env.DBUS_SESSION_BUS_ADDRESS) return;
@@ -95,7 +122,9 @@ export class TrayService {
         if (!this.closed) this.activate(action);
       };
       bus.export(trayMenuPath, new TrayMenu(activate));
-      bus.export(itemPath, new TrayItem(activate));
+      this.item = new TrayItem(activate);
+      bus.export(itemPath, this.item);
+      this.item.update(this.characterName, this.icon);
       void this.connect(bus).catch(() => {
         if (!this.closed)
           this.state = { id: "tray", label: "系统托盘", status: "error", detail: "托盘连接失败；可用快捷键打开界面" };

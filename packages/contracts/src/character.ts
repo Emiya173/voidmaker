@@ -219,6 +219,19 @@ export const characterDefinition = z
     id: characterId.refine((id) => id !== "default", "default 为内置助手"),
     name: z.string().trim().min(1).max(80),
     persona: z.string().trim().min(1).max(12000),
+    trayIcon: asset.optional(),
+    portraitExpressions: z
+      .array(
+        z
+          .object({
+            id: z.string().regex(/^[a-z0-9_-]{1,40}$/),
+            description: z.string().trim().min(1).max(300),
+            image: asset,
+          })
+          .strict(),
+      )
+      .max(24)
+      .optional(),
     avatar: z
       .object({ kind: z.literal("quick3d"), manifest: asset })
       .strict()
@@ -241,6 +254,20 @@ export const characterDefinition = z
         promptLanguage: z.string().min(1).max(32).default("zh"),
         textLanguage: z.string().min(1).max(32).default("auto"),
         url: localUrl.optional(),
+        references: z
+          .array(
+            z
+              .object({
+                id: z.string().regex(/^[a-z0-9_-]{1,40}$/),
+                description: z.string().trim().min(1).max(300),
+                reference: asset,
+                promptText: z.string().trim().min(1).max(2000),
+                promptLanguage: z.string().min(1).max(32).default("ja"),
+              })
+              .strict(),
+          )
+          .max(24)
+          .optional(),
       })
       .strict()
       .optional(),
@@ -248,6 +275,7 @@ export const characterDefinition = z
   .strict();
 
 export type CharacterDefinition = z.infer<typeof characterDefinition>;
+export type PortraitExpression = Readonly<{ id: string; description: string; imageUrl: string }>;
 export type CharacterSummary = Readonly<{ id: string; name: string; hasPortrait: boolean; hasVoice: boolean }>;
 export type CharacterPresentation = Readonly<{
   state: "idle" | "listening" | "thinking" | "speaking" | "error";
@@ -256,6 +284,7 @@ export type CharacterPresentation = Readonly<{
   mouth: number;
   subtitle: string;
   avatar?: AvatarPresentation;
+  expressionId?: string;
 }>;
 export type CharacterSnapshot = Readonly<{
   selectedId: string;

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { inspectArtifact, projectPath } from "../../../packages/adapters/src/artifacts.js";
-import { CodexAppServer } from "../../../packages/adapters/src/codex.js";
+import { CodexAppServer, type CodexOptions } from "../../../packages/adapters/src/codex.js";
 import type { WorkStore } from "../../../packages/adapters/src/work-store.js";
 import type { WorkItem } from "../../../packages/contracts/src/work.js";
 
@@ -10,25 +10,27 @@ export type RunnerFactory = (
   approve: (method: string, params: Record<string, unknown>) => Promise<"accept" | "decline">,
   event: (method: string, params: Record<string, unknown>) => void,
 ) => WorkRunner;
-const createRunner: RunnerFactory = (cwd, approve, onEvent) =>
-  new CodexAppServer(
-    approve,
-    cwd,
-    "codex",
-    [
-      "app-server",
-      "--stdio",
-      "--disable",
-      "plugins",
-      "--disable",
-      "hooks",
-      "--disable",
-      "apps",
-      "--disable",
-      "multi_agent",
-    ],
-    { work: true, onEvent },
-  );
+export const workRunner =
+  (options: CodexOptions = {}): RunnerFactory =>
+  (cwd, approve, onEvent) =>
+    new CodexAppServer(
+      approve,
+      cwd,
+      "codex",
+      [
+        "app-server",
+        "--stdio",
+        "--disable",
+        "plugins",
+        "--disable",
+        "hooks",
+        "--disable",
+        "apps",
+        "--disable",
+        "multi_agent",
+      ],
+      { ...options, work: true, onEvent },
+    );
 const resultSchema = z.object({
   outcome: z.enum(["completed", "blocked"]),
   summary: z.string().max(50_000),
@@ -47,7 +49,7 @@ export class WorkManager {
     readonly store: WorkStore,
     private readonly publish: (id: string) => void,
     private readonly report: (message: string) => void,
-    private readonly factory: RunnerFactory = createRunner,
+    private readonly factory: RunnerFactory = workRunner(),
   ) {}
   async start(): Promise<void> {
     await this.store.acquire(() => {

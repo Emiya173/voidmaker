@@ -7,6 +7,10 @@ Item {
     required property var snapshot
     property bool online: true
     property bool windowVisible: true
+    property bool useModel: false
+    readonly property bool modelAvailable: !!avatar
+    readonly property bool modelReady: avatarLoader.status === Loader.Ready
+    readonly property bool modelError: useModel && avatarLoader.status === Loader.Error
     readonly property var presentation: snapshot ? snapshot.presentation : null
     property var avatar: null
     onPresentationChanged: {
@@ -23,11 +27,11 @@ Item {
 
     Item {
         id: portrait
-        anchors { left: parent.left; right: parent.right; top: parent.top; bottom: caption.top; bottomMargin: 10 }
+        anchors.fill: parent
         Loader {
             id: avatarLoader
             anchors.fill: parent
-            active: !!view.avatar
+            active: !!view.avatar && view.useModel
             // Load lazily so machines without Qt Quick 3D retain the portrait UI.
             source: active ? "Character3D.qml" : ""
             onLoaded: {
@@ -39,61 +43,27 @@ Item {
         }
         Image {
             id: base
-            visible: avatarLoader.status !== Loader.Ready
+            visible: !view.useModel || !view.avatar || view.modelError
             anchors.fill: parent
             source: view.presentation ? view.presentation.baseUrl : ""
             fillMode: Image.PreserveAspectFit
             verticalAlignment: Image.AlignBottom
             sourceSize.width: 600
             cache: true
+            asynchronous: true
+            retainWhileLoading: true
         }
         Image {
             id: frame
-            visible: avatarLoader.status !== Loader.Ready
+            visible: !view.useModel || !view.avatar || view.modelError
             anchors.fill: parent
             source: view.presentation ? view.presentation.imageUrl : ""
             fillMode: Image.PreserveAspectFit
             verticalAlignment: Image.AlignBottom
             sourceSize.width: 600
             cache: true
-        }
-        Rectangle {
-            anchors.centerIn: parent
-            width: 144; height: 158; radius: 48
-            visible: avatarLoader.status !== Loader.Ready && base.status !== Image.Ready && frame.status !== Image.Ready
-            color: "#25384a"
-            border.color: view.presentation && view.presentation.state === "listening" ? "#97e5cc" : "#7397b5"
-            border.width: 2
-            Row {
-                anchors.horizontalCenter: parent.horizontalCenter
-                y: 50; spacing: 36
-                Repeater { model: 2; Rectangle { width: 12; height: 16; radius: 6; color: "#d8f1ff" } }
-            }
-            Rectangle {
-                anchors.horizontalCenter: parent.horizontalCenter
-                y: 101; width: 30; height: 4 + 20 * view.mouth; radius: height / 2
-                color: "#a4e9db"
-            }
-        }
-    }
-    Rectangle {
-        id: caption
-        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-        height: labels.implicitHeight + 20
-        radius: 14; color: "#e61b2433"
-        ColumnLayout {
-            id: labels
-            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 10 }
-            spacing: 5
-            Label { Layout.fillWidth: true; text: view.name + " · " + view.stateLabel
-                color: "#c7eae5"; textFormat: Text.PlainText; elide: Text.ElideRight }
-            Label {
-                Layout.fillWidth: true
-                visible: view.online && !!view.presentation && view.presentation.subtitle.length > 0
-                text: visible ? view.presentation.subtitle : ""
-                color: "#eef2f9"; textFormat: Text.PlainText
-                wrapMode: Text.Wrap; maximumLineCount: 4; elide: Text.ElideRight
-            }
+            asynchronous: true
+            retainWhileLoading: true
         }
     }
 }

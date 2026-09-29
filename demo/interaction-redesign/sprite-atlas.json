@@ -1,0 +1,56 @@
+{
+  "source": ".local/pixel.png",
+  "size": [
+    490,
+    343
+  ],
+  "grid": {
+    "columns": 5,
+    "rows": 4,
+    "origin": [
+      10,
+      11
+    ],
+    "stride": [
+      96,
+      83
+    ],
+    "frameSize": [
+      86,
+      72
+    ]
+  },
+  "presentation": {
+    "idle": [
+      0
+    ],
+    "listening": [
+      3
+    ],
+    "transcribing": [
+      4,
+      5
+    ],
+    "review": [
+      4
+    ],
+    "thinking": [
+      4,
+      5
+    ],
+    "speaking": [
+      17,
+      18
+    ],
+    "stopping": [
+      0
+    ],
+    "offline": [
+      8
+    ],
+    "error": [
+      8
+    ]
+  },
+  "note": "UI presentation mapping, not a claim about the original game's animation order. Source pixels are unchanged."
+}
