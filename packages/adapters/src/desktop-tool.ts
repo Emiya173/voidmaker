@@ -3,7 +3,7 @@ import type { DesktopContext } from "../../contracts/src/desktop.js";
 import { contextPrompt } from "../../domain/src/desktop.js";
 import type { CodexTool } from "./codex.js";
 
-export const desktopToolProfile = "desktop-tools-v1";
+export const desktopToolProfile = "desktop-terminal-v2";
 export function desktopTool(read: (screenshot: boolean, signal: AbortSignal) => Promise<DesktopContext>): CodexTool {
   return {
     name: "read_desktop",

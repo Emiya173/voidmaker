@@ -30,6 +30,7 @@ import { inspectAec, inspectDevices, inspectModel } from "../../../packages/adap
 import { HistoryStore } from "../../../packages/adapters/src/history-store.js";
 import { sessionActive } from "../../../packages/adapters/src/session.js";
 import { synthesize, transcribe } from "../../../packages/adapters/src/speech-http.js";
+import { terminalTool } from "../../../packages/adapters/src/terminal-tool.js";
 import { TrayService } from "../../../packages/adapters/src/tray.js";
 import { WorkStore } from "../../../packages/adapters/src/work-store.js";
 import type { ComposerSnapshot } from "../../../packages/contracts/src/composer.js";
@@ -123,6 +124,7 @@ class Host {
   private readonly desktopStore = new DesktopStore(process.env.DATABASE_URL);
   private readonly presence = new Map<Socket, boolean>();
   private desktopReplyGeneration: number | null = null;
+  private terminalGeneration: number | null = null;
 
   constructor(
     private readonly database: Database,
@@ -150,6 +152,10 @@ class Host {
         ...this.chatOptions,
         restricted: true,
         tools: [
+          terminalTool(
+            homedir(),
+            () => this.state.phase === "thinking" && this.terminalGeneration === this.state.generation,
+          ),
           desktopTool((screenshot, signal) => {
             if (this.state.phase !== "thinking") throw new Error("对话已停止");
             this.desktopReplyGeneration = this.state.generation;
@@ -758,6 +764,7 @@ class Host {
     const voiceGeneration = this.voice.beginReply();
     this.state = transition(this.state, { type: "send" });
     const generation = this.state.generation;
+    if (!observed) this.terminalGeneration = generation;
     if (desktopId || observed) this.desktopReplyGeneration = generation;
     this.broadcast({ type: "status", status: "thinking" });
     try {
@@ -828,6 +835,7 @@ class Host {
         }
       }
     } finally {
+      if (this.terminalGeneration === generation) this.terminalGeneration = null;
       if (this.desktopReplyGeneration === generation) this.desktopReplyGeneration = null;
       if (this.state.phase === "thinking" && this.state.generation === generation) {
         this.state = transition(this.state, { type: "complete", generation });

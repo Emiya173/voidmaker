@@ -224,6 +224,15 @@ it.skipIf(!url)(
         events.some((e) => e.type === "message" && e.message.role === "user" && e.message.text === "desktop_tool"),
       ).toBe(true);
       events = [];
+      send({ type: "send", text: "terminal_tool" });
+      await expect.poll(() => events.some((e) => e.type === "message" && e.message.role === "assistant")).toBe(true);
+      await expect.poll(() => events.some((e) => e.type === "status" && e.status === "idle")).toBe(true);
+      const terminalReply = events.find((e) => e.type === "message" && e.message.role === "assistant");
+      expect(terminalReply?.type === "message" && JSON.parse(terminalReply.message.text)).toEqual({
+        success: true,
+        stdout: "terminal-ok",
+      });
+      events = [];
       send({ type: "project_add", name: "Host test", path: dir });
       await expect.poll(() => events.some((e) => e.type === "work_changed")).toBe(true);
       send({ type: "work_list" });

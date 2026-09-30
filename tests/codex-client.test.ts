@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServer } from "../packages/adapters/src/codex.js";
 import { desktopTool } from "../packages/adapters/src/desktop-tool.js";
+import { terminalTool } from "../packages/adapters/src/terminal-tool.js";
 
 const clients: CodexAppServer[] = [];
 
@@ -19,6 +20,27 @@ afterEach(async () => {
 });
 
 describe("Codex App Server transport", () => {
+  it("exposes the terminal to user conversations and returns real command results through the tool protocol", async () => {
+    let allowed = true;
+    const instance = new CodexAppServer(
+      async () => "decline",
+      process.cwd(),
+      process.execPath,
+      [join(process.cwd(), "tests/fixtures/fake-codex.mjs")],
+      { restricted: true, tools: [terminalTool(process.cwd(), () => allowed)] },
+    );
+    clients.push(instance);
+    await instance.start();
+    const thread = await instance.startThread();
+    const policy = JSON.parse(await instance.run(thread, "policy", () => {}));
+    expect(policy.threadParams.dynamicTools[0].name).toBe("run_terminal");
+    expect(policy.threadParams.baseInstructions).toContain("不要声称无法操作");
+    const result = JSON.parse(await instance.run(thread, "terminal_tool", () => {}));
+    expect(result.success).toBe(true);
+    expect(JSON.parse(result.contentItems[0].text)).toMatchObject({ exitCode: 0, stdout: "terminal-ok" });
+    allowed = false;
+    expect(JSON.parse(await instance.run(thread, "terminal_tool", () => {})).success).toBe(false);
+  });
   it("registers only desktop functions, returns image content, and rejects stale or malformed requests", async () => {
     const read = vi.fn(async () => ({
       context: "fixture",

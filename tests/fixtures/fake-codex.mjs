@@ -40,11 +40,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       send({ id: "approval-1", method: "item/commandExecution/requestApproval", params: { threadId, turnId: String(turnId), command: "echo test" } });
       return;
     }
-    if (["tool", "tool_wrong_thread", "tool_bad_args", "desktop_tool"].includes(message.params.input[0].text)) {
+    if (["tool", "tool_wrong_thread", "tool_bad_args", "desktop_tool", "terminal_tool"].includes(message.params.input[0].text)) {
       const input = message.params.input[0].text;
       const requestId = "dynamic-" + turnId;
       const params = { threadId, turnId: String(turnId), callId: requestId, namespace: null, tool: "read_desktop", arguments: input === "tool_bad_args" ? { includeScreenshot: "invalid" } : { includeScreenshot: input === "desktop_tool" ? false : true } };
-      toolRequests.set(requestId, { ...params, host: input === "desktop_tool" });
+      if (input === "terminal_tool") {
+        params.tool = "run_terminal";
+        params.arguments = { command: "printf terminal-ok", cwd: null, timeoutSeconds: 2 };
+      }
+      toolRequests.set(requestId, { ...params, host: input === "desktop_tool" || (input === "terminal_tool" && !!message.params.outputSchema?.properties?.segments) });
       send({ id: requestId, method: "item/tool/call", params: { ...params, threadId: input === "tool_wrong_thread" ? "stale-thread" : threadId } });
       return;
     }
@@ -69,7 +73,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   if (toolRequests.has(message.id) && message.result) {
     const params = toolRequests.get(message.id); toolRequests.delete(message.id);
     lastToolResult = message.result;
-    const summary = JSON.stringify({ success: message.result.success, sawContext: message.result.contentItems.some(item => item.text?.includes("fixture desktop context")) });
+    const summary = JSON.stringify(params.tool === "run_terminal" ? { success: message.result.success, stdout: message.result.success ? JSON.parse(message.result.contentItems[0].text).stdout : "" } : { success: message.result.success, sawContext: message.result.contentItems.some(item => item.text?.includes("fixture desktop context")) });
     const text = params.host ? JSON.stringify({ openingClipId: "none", segments: [{ subtitle: summary, text: "確認したよ。", referenceId: "neutral", portraitId: "neutral" }] }) : JSON.stringify(message.result);
     notify("item/completed", { threadId: params.threadId, turnId: params.turnId, item: { type: "agentMessage", phase: "final_answer", text } });
     notify("turn/completed", { threadId: params.threadId, turn: { id: params.turnId, status: "completed" } });
