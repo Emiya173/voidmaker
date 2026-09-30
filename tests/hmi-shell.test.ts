@@ -129,8 +129,9 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
                 break;
               case "composer_send": {
                 const value = submission(composer, command.source, command.generation);
-                expect(value.text).toBe("修正后的转写");
-                expect(value.desktopId).toBeNull();
+                const sent = commands.filter((item) => item.type === "composer_send").length;
+                expect(value.text).toBe(["修正后的转写", "保留的文字草稿\nx", "中文回车发送"][sent - 1]);
+                expect(value.desktopId).toBe(sent === 2 ? "fixture-image" : null);
                 composer = compose(composer, { type: "consumed", submission: value });
                 project(socket);
                 voice = { ...voice, phase: "thinking", generation: voice.generation + 1 };
@@ -244,7 +245,14 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
           root.toggleChat(); root.checkStep++; break
         case 8:
           root.insist(root.separate(chat), "expanded text card covers character")
-          root.capture("production-expanded", () => { root.toggleImmersive(); root.checkStep++ }); break
+          root.capture("production-expanded")
+          keys.mouseClick(input.editor, 18, 14)
+          input.editor.cursorPosition = input.editor.length
+          keys.keyClick(Qt.Key_Return, Qt.ShiftModifier)
+          keys.keyClick(Qt.Key_X)
+          root.insist(input.editor.text === "保留的文字草稿\\nx" && composer.text === input.editor.text, "typing did not update the text draft")
+          keys.keyClick(Qt.Key_Return)
+          root.checkStep = 28; break
         case 9:
           root.capture("production-immersive"); root.checkStep++; break
         case 10:
@@ -327,6 +335,20 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
           root.insist(!root.continuous && !dockContinuous.selected, "single-turn microphone restarted continuous mode")
           root.setVisibility(false)
           console.log("HMI_PASSED"); Qt.quit(); break
+        case 28:
+          if (root.status !== "idle" || composer.text || composer.pendingText) return
+          root.insist(input.editor.text === "" && !composer.desktopId, "sent text or attachment remained in the editor")
+          root.toggleImmersive(); root.checkStep = 29; break
+        case 29:
+          keys.mouseClick(input.editor, 18, 14)
+          input.editor.insert(0, "中文回车发送")
+          keys.keyClick(Qt.Key_Enter)
+          root.checkStep = 30; break
+        case 30:
+          if (root.status !== "idle" || composer.text || composer.pendingText) return
+          root.insist(input.editor.text === "", "immersive Enter did not clear sent text")
+          composer.edit("text", "保留的文字草稿"); composer.attach("fixture-image")
+          root.checkStep = 9; break
         }
       } catch (error) { console.log("HMI_FAILED: " + error); Qt.quit() }
     } }
@@ -351,7 +373,11 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
       expect(log).toContain("HMI_PASSED");
       expect(log).not.toMatch(/HMI_FAILED|ReferenceError|TypeError|Failed to load|Cannot assign|Binding loop/);
       expect(failures).toEqual([]);
-      expect(commands.filter((command) => command.type === "composer_send")).toHaveLength(1);
+      expect(commands.filter((command) => command.type === "composer_send").map((command) => command.source)).toEqual([
+        "transcript",
+        "text",
+        "text",
+      ]);
       expect(commands.filter((command) => command.type === "stop")).toHaveLength(3);
       expect(commands.filter((command) => command.type === "voice_start").map((command) => command.continuous)).toEqual(
         [false, true, true, true, false],

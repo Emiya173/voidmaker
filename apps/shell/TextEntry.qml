@@ -10,6 +10,7 @@ Flickable {
     property int minimumHeight: 52
     property int maximumHeight: 120
     property alias editor: editor
+    property bool synchronizing: false
     signal edited(string value)
     signal submitted()
     signal escaped()
@@ -20,13 +21,21 @@ Flickable {
     boundsBehavior: Flickable.StopAtBounds
     flickableDirection: Flickable.VerticalFlick
     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-    onValueChanged: { if (editor.text !== value) editor.text = value }
+    // Echoing a local edit through a text binding can reset an ongoing IME
+    // composition. Only replace the document when the Host supplies new text.
+    onValueChanged: synchronize()
+    Component.onCompleted: synchronize()
+    function synchronize() {
+        if (editor.text === value) return
+        synchronizing = true
+        editor.text = value
+        synchronizing = false
+    }
     function focusEditor() { editor.forceActiveFocus(Qt.OtherFocusReason) }
     TextArea {
         id: editor
         width: entry.width - 10
         height: Math.max(entry.minimumHeight, implicitHeight)
-        text: entry.value
         color: entry.ink; selectionColor: entry.selection; selectedTextColor: "#ffffff"
         placeholderText: entry.placeholder; placeholderTextColor: "#aa96ad"
         Accessible.name: entry.placeholder
@@ -42,9 +51,11 @@ Flickable {
             else if (bottom > entry.contentY + entry.height) entry.contentY = bottom - entry.height
         }
         onTextChanged: {
+            if (entry.synchronizing) return
             if (text.length > 10000) { remove(10000, length); return }
             if (text !== entry.value) entry.edited(text)
         }
+        Keys.priority: Keys.BeforeItem
         Keys.onPressed: event => {
             if (event.key === Qt.Key_Escape && !inputMethodComposing) {
                 focus = false; entry.escaped(); event.accepted = true
