@@ -12,6 +12,7 @@ type Binding = Readonly<{ sessionId: string; threadId: string }>;
 type Ports = Readonly<{
   idle: () => boolean;
   prepare: (character: Character, signal: AbortSignal, sessionId?: string) => Promise<Binding>;
+  prepareVoice?: (character: Character, signal: AbortSignal) => Promise<void>;
   persist: (id: string, binding: Binding) => Promise<void>;
   publish: () => void;
 }>;
@@ -78,6 +79,10 @@ export class CharacterController {
     const sessionId = typeof session === "function" ? await session() : session;
     signal.throwIfAborted();
     const binding = await this.ports.prepare(character, signal, sessionId);
+    this.controller.signal.throwIfAborted();
+    // Restoring the initial character must not block text chat on a cold/unavailable TTS service.
+    // Synthesis always verifies the desired model again, including after a service restart.
+    if (this.binding.threadId) await this.ports.prepareVoice?.(character, signal);
     this.controller.signal.throwIfAborted();
     await this.ports.persist(character.id, binding);
     this.controller.signal.throwIfAborted();

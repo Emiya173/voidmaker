@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { VoiceConfig } from "../../contracts/src/voice.js";
+import type { SpeechReference } from "../../contracts/src/speech.js";
+import { speechModelSchema, type VoiceConfig } from "../../contracts/src/voice.js";
 import { readWav } from "./pcm.js";
 
 async function body(response: Response, maxBytes: number): Promise<Buffer> {
@@ -50,34 +51,61 @@ export async function transcribe(
   return result.text.replace(/<\|[^|]*\|>/g, "").trim();
 }
 
+/** The shared runtime atomically loads both weights; each synthesis also carries its target model. */
+export async function prepareSynthesis(config: VoiceConfig["tts"], signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  if (!config?.model) return;
+  const response = await fetch(new URL("/model", config.url), {
+    method: "POST",
+    redirect: "error",
+    headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.any([signal, AbortSignal.timeout(config.timeoutMs)]),
+    body: JSON.stringify({ model: config.model }),
+  });
+  const result = z
+    .object({ ready: z.literal(true), model: speechModelSchema })
+    .parse(JSON.parse((await body(response, 16 * 1024)).toString()));
+  signal.throwIfAborted();
+  if (
+    result.model.gptWeightsPath !== config.model.gptWeightsPath ||
+    result.model.sovitsWeightsPath !== config.model.sovitsWeightsPath
+  )
+    throw new Error("TTS 返回的模型与所选角色不一致");
+}
+
 export async function synthesize(
   text: string,
   config: NonNullable<VoiceConfig["tts"]>,
   signal: AbortSignal,
+  reference?: SpeechReference,
 ): Promise<Buffer> {
   signal.throwIfAborted();
+  const prompt = reference ?? config;
+  const payload = {
+    ...(config.model ? { model: config.model } : {}),
+    text,
+    text_lang: ["ja", "zh"].includes(config.textLanguage) && /[A-Za-z]/.test(text) ? "auto" : config.textLanguage,
+    ref_audio_path: prompt.refAudioPath,
+    prompt_text: prompt.promptText,
+    prompt_lang: prompt.promptLanguage,
+    text_split_method: "cut1",
+    batch_size: 1,
+    media_type: "wav",
+    streaming_mode: false,
+    top_k: 15,
+    top_p: 1,
+    temperature: 1,
+    repetition_penalty: 1.2,
+  };
   const response = await fetch(config.url, {
     method: "POST",
     redirect: "error",
     headers: { "Content-Type": "application/json" },
     signal: AbortSignal.any([signal, AbortSignal.timeout(config.timeoutMs)]),
-    body: JSON.stringify({
-      text,
-      text_lang: ["ja", "zh"].includes(config.textLanguage) && /[A-Za-z]/.test(text) ? "auto" : config.textLanguage,
-      ref_audio_path: config.refAudioPath,
-      prompt_text: config.promptText,
-      prompt_lang: config.promptLanguage,
-      text_split_method: "cut1",
-      batch_size: 1,
-      media_type: "wav",
-      streaming_mode: false,
-      top_k: 15,
-      top_p: 1,
-      temperature: 1,
-      repetition_penalty: 1.2,
-    }),
+    body: JSON.stringify(payload),
   });
   const wav = await body(response, 32 * 1024 * 1024);
+  signal.throwIfAborted();
   readWav(wav);
   return wav;
 }

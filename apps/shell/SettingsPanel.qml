@@ -57,6 +57,8 @@ ColumnLayout {
         }
         if (ttsEnabled.checked) {
             value.tts = {url:ttsUrl.text.trim(),refAudioPath:reference.text.trim(),promptText:promptText.text.trim(),promptLanguage:promptLanguage.text.trim(),textLanguage:textLanguage.text.trim(),timeoutMs:Number(ttsTimeout.text)}
+            if (base.tts && base.tts.provider) value.tts.provider = base.tts.provider
+            if (base.tts && base.tts.model) value.tts.model = JSON.parse(JSON.stringify(base.tts.model))
             if (ttsHealth.text.trim()) value.tts.healthUrl = ttsHealth.text.trim()
         }
         if (aecEnabled.checked) value.aec = Object.assign({},base.aec || {},{pluginDirectory:plugin.text.trim(),outputTarget:outputTarget.text.trim(),bargeIn:bargeEnabled.checked})

@@ -59,6 +59,19 @@ ASR 仅接受指定模型、JSON 输出和最多 60 秒 / 4 MiB 音频，正在�
 
 常用操作：
 
+当前共享 TTS 部署只使用 `voidmaker-tts.service`；角色权重切换见 [语音接入](VOICE_SETUP.md)。
+将 [桌面入口](voidmaker.desktop) 安装到 `~/.local/share/applications/voidmaker.desktop` 后，
+应用启动器通过 `systemctl --user start voidmaker-shell.service` 拉起 Shell、Host、数据库、ASR 和共享 TTS。
+服务可以保持未启用登录自启，仍能由桌面入口按需启动；`Wants` 不代表模型已经完成加载。
+
+2026-09-30 共享 TTS 迁移验证：独立 GPT-SoVITS 环境保留原锁文件，新增 `voidmaker_api.py` 与
+`test_voidmaker_api.py`；Host 仅依赖 ASR 和单个 `voidmaker-tts.service`，角色专用服务已停用。
+实机完成七海 → 夜乃樱（原全局权重/参考）→ 七海，切换分别约 1.51 / 1.69 / 1.58 秒。
+同一句日语的合成分别约 7.63 / 0.93 / 1.43 秒，首句包含冷启动开销，不能据此比较模型性能。
+缺失权重请求保留原模型；取消推理后切换到另一角色，服务最终模型与请求一致。
+样本仅保存为本地 WAV，未播放、未录音、未做音质人工验收，也未通过真实对话模型发起测试。
+65 项应用回归、4 项独立运行时测试、TypeScript/Biome 检查、构建、desktop 文件和 systemd 单元校验通过。
+
 ```sh
 systemctl --user status voidmaker-{postgres,asr,tts,host,shell}.service
 curl --fail http://127.0.0.1:8000/health

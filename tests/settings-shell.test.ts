@@ -14,6 +14,14 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
       inputTarget: "mic",
       aec: { pluginDirectory: "/plugin", outputTarget: "speaker", bargeIn: true },
       asr: { url: "http://127.0.0.1:8000/v1/audio/transcriptions" },
+      tts: {
+        provider: "gpt-sovits",
+        url: "http://127.0.0.1:9880/tts",
+        refAudioPath: "/reference.wav",
+        promptText: "reference",
+        textLanguage: "ja",
+        model: { gptWeightsPath: "/default.ckpt", sovitsWeightsPath: "/default.pth" },
+      },
     });
     await copyFile("apps/shell/SettingsPanel.qml", join(dir, "SettingsPanel.qml"));
     await writeFile(
@@ -27,6 +35,10 @@ ShellRoot { FloatingWindow { visible:true;width:500;height:700
   panel.receive({type:"settings",settings:{revision:"r1",config:config,busy:false,error:"",canRestore:false}})
   if(JSON.stringify(panel.config()) !== JSON.stringify(config)) {
     if(panel.config().aec.settings.nearendHold !== config.aec.settings.nearendHold || panel.config().inputTarget !== "mic") throw new Error("lost advanced config")
+  }
+  if(JSON.stringify(panel.config().tts) !== JSON.stringify(config.tts)) {
+    const actual=panel.config().tts
+    if(actual.provider !== "gpt-sovits" || JSON.stringify(actual.model) !== JSON.stringify(config.tts.model) || actual.textLanguage !== "ja") throw new Error("lost shared TTS model configuration")
   }
   panel.dirty=true
   panel.receive({type:"settings",settings:{revision:"r1",config:config,busy:true}})

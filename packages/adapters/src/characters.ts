@@ -44,6 +44,7 @@ export const defaultCharacter: Character = {
 };
 export function characterTts(config: VoiceConfig["tts"], character: Character): VoiceConfig["tts"] {
   const voice = character.voice;
+  if (config?.model) return { ...config, ...voice, url: config.url, model: voice?.model ?? config.model };
   if (voice?.url) return { ...voice, url: voice.url, timeoutMs: config?.timeoutMs ?? 120_000 };
   return config ? { ...config, ...voice } : undefined;
 }
@@ -196,6 +197,15 @@ export async function loadCharacters(
           textLanguage: definition.voice.textLanguage,
           ...(definition.voice.url ? { url: definition.voice.url } : {}),
         };
+        if (definition.voice.model) {
+          const gptWeightsPath = await assetPath(root, definition.voice.model.gptWeightsPath);
+          const sovitsWeightsPath = await assetPath(root, definition.voice.model.sovitsWeightsPath);
+          for (const path of [gptWeightsPath, sovitsWeightsPath]) {
+            const info = await stat(path);
+            if (!info.isFile() || !info.size) throw new Error("角色语音权重无效");
+          }
+          voice = { ...voice, model: { gptWeightsPath, sovitsWeightsPath } };
+        }
         for (const clip of definition.voice.waitingClips ?? []) {
           try {
             const wav = await boundedFile(await assetPath(root, clip.audio), 2 * 1024 * 1024);

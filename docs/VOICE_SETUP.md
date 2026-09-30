@@ -58,7 +58,25 @@ SenseVoice 还可考察 [sherpa-onnx 原生运行时](https://k2-fsa.github.io/s
 python api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
 ```
 
-模型路径、设备与权重由服务自己的配置管理。VoidMaker 不切换共享服务中的角色权重。
+以上是固定权重的原生接口。使用共享服务切换角色权重时，独立推理环境需安装 `voidmaker_api.py` 扩展，
+同一锁定环境中以 `python voidmaker_api.py -a 127.0.0.1 -p 9880 -c ~/.config/voidmaker/tts-infer.yaml` 启动。
+扩展运行在单进程内，共享 BERT / CNHuBERT；加载新角色前释放旧 GPT / SoVITS 和声码器，清理参考缓存。
+只在两个权重加载成功后持久化配置；部分失败时禁止使用不完整权重合成，下一次请求可以重新加载恢复。
+
+全局 `tts.model` 格式为 `{"gptWeightsPath":"/absolute/default.ckpt","sovitsWeightsPath":"/absolute/default.pth"}`。
+启用后所有角色共用全局 TTS URL；角色包可以用 `voice.model` 覆盖权重，路径必须在包内。
+没有专用权重的角色回到全局默认模型，设置页保存时保留该配置。
+扩展 HTTP 契约：
+
+- `POST /model` 接受 `{"model":{...}}`，完成整对加载后返回 `{"ready":true,"model":{...}}`；加载失败返回 503。
+- `POST /tts` 在原有字段之外要求 `model`，将选模型和非流式合成串行执行；不接受流式请求。
+- `GET /health` / `GET /model` 返回当前就绪状态和权重；部分加载失败返回 503。
+- 原生的两个独立换权重接口不在扩展中开放，避免绕过串行切换与缓存清理。
+
+Host 切换角色时预加载；首次启动保留独立文字交互能力，不等待冷启动模型。
+每次合成都重申目标权重，无需依赖 Host 的缓存，也能应对推理服务重启。
+取消会丢弃旧轮次结果，已经进入 GPU 的计算可能继续到结束；此期间服务不会并行更换权重。
+
 需准备有权使用的参考录音、准确转写和语言；`refAudioPath` 必须是**服务端可读取的绝对路径**。
 
 客户端按句发送 `/tts`，指定 `media_type=wav`、`streaming_mode=false`，校验 PCM 16-bit WAV 后播放。

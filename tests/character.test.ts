@@ -237,6 +237,66 @@ it("drives mouth only from playback PCM, resets on stop and ignores late progres
     subtitle: "",
   });
 });
+it("uses a shared endpoint with character weights and restores the global pair for characters without weights", () => {
+  const model = { gptWeightsPath: "/default.ckpt", sovitsWeightsPath: "/default.pth" };
+  const tts = {
+    url: "http://127.0.0.1:9880/tts",
+    healthUrl: "http://127.0.0.1:9880/health",
+    model,
+    refAudioPath: "/ref.wav",
+    promptText: "test",
+    promptLanguage: "ja",
+    textLanguage: "ja",
+    timeoutMs: 120000,
+  };
+  const character = {
+    ...defaultCharacter,
+    voice: {
+      ...tts,
+      url: "http://127.0.0.1:9881/tts",
+      model: { gptWeightsPath: "/chiaki.ckpt", sovitsWeightsPath: "/chiaki.pth" },
+      refAudioPath: "/chiaki.wav",
+    },
+  };
+  expect(characterTts(tts, character)).toMatchObject({
+    url: tts.url,
+    model: character.voice.model,
+    refAudioPath: "/chiaki.wav",
+  });
+  expect(characterTts(tts, defaultCharacter)).toEqual(tts);
+});
+
+it("loads character weights inside the asset root and rejects incomplete or escaping pairs", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "voidmaker-character-model-"));
+  paths.push(directory);
+  const root = join(directory, "model");
+  await mkdir(root);
+  await writeFile(join(root, "ref.wav"), Buffer.from("reference"));
+  await writeFile(join(root, "gpt.ckpt"), "gpt");
+  await writeFile(join(root, "sovits.pth"), "sovits");
+  const definition = {
+    version: 1,
+    id: "model",
+    name: "Model",
+    persona: "test",
+    voice: {
+      reference: "ref.wav",
+      promptText: "test",
+      model: { gptWeightsPath: "gpt.ckpt", sovitsWeightsPath: "sovits.pth" },
+    },
+  };
+  await writeFile(join(root, "character.json"), JSON.stringify(definition));
+  expect((await loadCharacters(directory)).entries[1]?.voice?.model).toEqual({
+    gptWeightsPath: join(root, "gpt.ckpt"),
+    sovitsWeightsPath: join(root, "sovits.pth"),
+  });
+  await rm(join(root, "sovits.pth"));
+  expect((await loadCharacters(directory)).entries).toHaveLength(1);
+  await writeFile(join(directory, "outside.pth"), "outside");
+  await symlink(join(directory, "outside.pth"), join(root, "sovits.pth"));
+  expect((await loadCharacters(directory)).entries).toHaveLength(1);
+});
+
 it("isolates character endpoints and never inherits the other model's health URL", () => {
   const global = {
     url: "http://127.0.0.1:9880/tts",
@@ -364,6 +424,56 @@ it("projects toon settings and rejects missing or escaping ramp textures", async
   expect(catalog.entries[1]?.avatar).toBeUndefined();
   expect(catalog.warnings).toHaveLength(1);
 });
+it("waits for voice model selection, preserves the old character on failure and ignores completion after shutdown", async () => {
+  const other = { ...defaultCharacter, id: "other", name: "Other" };
+  let finish!: () => void;
+  let fail!: (error: Error) => void;
+  const prepareVoice = vi.fn(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        finish = resolve;
+        fail = reject;
+      }),
+  );
+  const persist = vi.fn(async () => {});
+  const controller = new CharacterController(
+    { entries: [defaultCharacter, other], warnings: [] },
+    {
+      idle: () => true,
+      prepare: async (character) => ({ sessionId: character.id, threadId: character.id }),
+      prepareVoice,
+      persist,
+      publish: vi.fn(),
+    },
+  );
+  await controller.select("default");
+  expect(prepareVoice).not.toHaveBeenCalled(); // Cold TTS must not block startup/text chat.
+  const failed = controller.select("other");
+  const rejection = expect(failed).rejects.toThrow("model failed");
+  await vi.waitFor(() => expect(prepareVoice).toHaveBeenCalledTimes(1));
+  fail(new Error("model failed"));
+  await rejection;
+  expect(controller.current.id).toBe("default");
+  expect(persist).toHaveBeenCalledTimes(1);
+  const pending = controller.select("other");
+  await vi.waitFor(() => expect(prepareVoice).toHaveBeenCalledTimes(2));
+  expect(controller.changing).toBe(true);
+  expect(controller.current.id).toBe("default");
+  expect(() => controller.select("default")).toThrow("停止");
+  finish();
+  await pending;
+  expect(controller.current.id).toBe("other");
+  const late = controller.select("default");
+  const cancelled = expect(late).rejects.toThrow();
+  await vi.waitFor(() => expect(prepareVoice).toHaveBeenCalledTimes(3));
+  const closed = controller.close();
+  finish();
+  await cancelled;
+  await closed;
+  expect(controller.current.id).toBe("other");
+  expect(persist).toHaveBeenCalledTimes(2);
+});
+
 it("rejects concurrent/busy switches and retains the previous character on failure or late shutdown", async () => {
   const other = { ...defaultCharacter, id: "other", name: "Other" };
   let resolve!: (binding: { sessionId: string; threadId: string }) => void;

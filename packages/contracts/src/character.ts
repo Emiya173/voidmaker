@@ -254,6 +254,7 @@ export const characterDefinition = z
         promptLanguage: z.string().min(1).max(32).default("zh"),
         textLanguage: z.string().min(1).max(32).default("auto"),
         url: localUrl.optional(),
+        model: z.object({ gptWeightsPath: asset, sovitsWeightsPath: asset }).strict().optional(),
         waitingClips: z
           .array(z.object({ audio: asset, subtitle: z.string().trim().min(1).max(80) }).strict())
           .max(8)

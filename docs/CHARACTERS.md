@@ -51,9 +51,11 @@ Blender 几何编辑、零修改往返与正式 Qt 检查台见 [角色修模流
 ```
 
 `portraits`、`voice`、`avatar` 均可省略；配置了 `portraits` 时 `idle` 必填，其余图片可选。
-省略角色 `voice` 时沿用全局已配置的 TTS。未设置角色 `voice.url` 时仅覆盖参考音频/文本/语言；
-设置 `voice.url` 可指向角色专用回环 HTTP TTS 端点，此时不继承全局健康检查地址，
-没有全局 TTS 配置也能朗读。权重仍由独立模型服务管理；选择角色不会切换共享服务的权重或启动 Python。
+省略角色 `voice` 时沿用全局已配置的 TTS。全局 `tts.model` 启用共享服务后，所有角色使用全局 URL，
+角色 `voice.model` 指定包内的 `gptWeightsPath` / `sovitsWeightsPath` 相对路径；未指定时恢复全局默认权重。
+选择角色时通过 HTTP 加载整对权重，完成后才提交角色切换；失败保留原角色。启动恢复不等待 TTS，
+每次合成仍携带目标权重，由服务串行检查和加载，防止服务重启或取消后使用错误声线。
+未配置共享权重时仍可用 `voice.url` 指向独立回环端点，此时不继承全局健康检查地址。
 只有参考音频、没有独立 URL 和全局 TTS 时不会启用朗读。
 
 - `id` 为小写字母/数字/下划线/连字符，最长 64 字符；`default` 保留给内置助手。
@@ -219,12 +221,11 @@ Flake 已提供 Qt QML/插件路径。系统全局 Quickshell 可能使用另一
 以及坏索引、缺阴影贴图、源指纹不符、替换纹理未匹配/越界的失败清理；不依赖下载角色素材。
 `tests/character-sculpt.test.ts` 另覆盖局部影响范围、法线方向、表情终点、发饰旋转和翻转拒绝。
 
-七海千秋服务模板见 [voidmaker-tts-chiaki.service](systemd/voidmaker-tts-chiaki.service)，
-`~/.config/voidmaker/tts-chiaki.yaml` 的 `custom` 配置须设为 `version: v2ProPlus`，
-并将 `t2s_weights_path`、`vits_weights_path` 指向导入目录内 `voice/gpt.ckpt`、`voice/sovits.pth` 的绝对路径。
-BERT、CNHuBERT 路径使用独立 GPT-SoVITS 环境原有预训练文件；AMD 本机使用 `device: cuda`、`is_half: true`。
-新服务独占 `127.0.0.1:9881`，原默认服务继续使用 9880。
+七海千秋与其他角色现在共用 [voidmaker-tts.service](systemd/voidmaker-tts.service)。
+在七海的 `voice` 下增加 `"model": {"gptWeightsPath":"voice/gpt.ckpt","sovitsWeightsPath":"voice/sovits.pth"}`，
+删除旧的独立 `voice.url`。在全局 `voice.json` 中配置默认 `tts.model` 的绝对路径，并使用 9880 端点。
+服务端权重切换与部署要求见 [语音接入](VOICE_SETUP.md)。模型和配置保留在仓库外。
 
-安装后可在本机 `~/.config/systemd/user/voidmaker-host.service.d/30-chiaki-tts.conf` 添加
-`[Unit]` 下的 `Wants=voidmaker-tts-chiaki.service`，再执行 `systemctl --user daemon-reload`。
-这样七海服务随 Host 启动，无需让所有部署都安装该角色，也无需修改通用 Host 服务模板。
+从双服务部署迁移时，移除 Host 的 `30-chiaki-tts.conf` 依赖 drop-in，并执行
+`systemctl --user disable --now voidmaker-tts-chiaki.service` 和 `systemctl --user daemon-reload`。
+Host 的通用模板已经依赖 ASR 和共享 TTS；不要再添加角色专用服务依赖。

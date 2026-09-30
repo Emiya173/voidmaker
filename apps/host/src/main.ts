@@ -29,7 +29,7 @@ import { desktopTool, desktopToolProfile } from "../../../packages/adapters/src/
 import { inspectAec, inspectDevices, inspectModel } from "../../../packages/adapters/src/diagnostics.js";
 import { HistoryStore } from "../../../packages/adapters/src/history-store.js";
 import { sessionActive } from "../../../packages/adapters/src/session.js";
-import { synthesize, transcribe } from "../../../packages/adapters/src/speech-http.js";
+import { prepareSynthesis, synthesize, transcribe } from "../../../packages/adapters/src/speech-http.js";
 import { terminalTool } from "../../../packages/adapters/src/terminal-tool.js";
 import { TrayService } from "../../../packages/adapters/src/tray.js";
 import { WorkStore } from "../../../packages/adapters/src/work-store.js";
@@ -180,6 +180,8 @@ class Host {
         if (!character) throw new Error("角色不存在");
         return this.history.select(character, binding.sessionId);
       },
+      prepareVoice: (character, signal) =>
+        prepareSynthesis(characterTts(this.settings.snapshot.config.tts, character), signal),
       publish: () => {
         this.publishCharacter();
         this.broadcast({ type: "voice", voice: this.voice.snapshot });
@@ -269,21 +271,7 @@ class Host {
           const config = characterTts(voiceConfig.tts, this.character.current);
           if (!config) throw new Error("未配置 TTS");
           const reference = this.character.current.speechReferences?.find((entry) => entry.id === referenceId);
-          return synthesize(
-            text,
-            {
-              ...config,
-              ...(reference
-                ? {
-                    refAudioPath: reference.refAudioPath,
-                    promptText: reference.promptText,
-                    promptLanguage: reference.promptLanguage,
-                  }
-                : {}),
-              textLanguage: this.config.speech.language,
-            },
-            signal,
-          );
+          return synthesize(text, { ...config, textLanguage: this.config.speech.language }, signal, reference);
         },
         play: (wav, signal, onProgress) =>
           playAudio(

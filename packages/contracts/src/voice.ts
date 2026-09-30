@@ -12,6 +12,13 @@ export const localUrl = z.url().refine((value) => {
   );
 }, "语音服务必须使用本机回环 HTTP 地址");
 
+export const speechModelSchema = z
+  .object({
+    gptWeightsPath: z.string().refine(isAbsolute, "GPT 权重必须为绝对路径"),
+    sovitsWeightsPath: z.string().refine(isAbsolute, "SoVITS 权重必须为绝对路径"),
+  })
+  .strict();
+
 export const voiceConfigSchema = z
   .object({
     inputTarget: z.string().min(1).max(512).optional(),
@@ -42,10 +49,12 @@ export const voiceConfigSchema = z
       .optional(),
     tts: z
       .object({
+        provider: z.literal("gpt-sovits").optional(),
+        model: speechModelSchema.optional(),
         url: localUrl,
         healthUrl: localUrl.optional(),
         refAudioPath: z.string().refine(isAbsolute, "参考音频必须为模型服务可读取的绝对路径"),
-        promptText: z.string().min(1),
+        promptText: z.string().trim().min(1, "GPT-SoVITS 需要参考音频的准确文本"),
         promptLanguage: z.string().default("zh"),
         textLanguage: z.string().default("auto"),
         timeoutMs: z.number().int().min(100).max(300_000).default(120_000),
