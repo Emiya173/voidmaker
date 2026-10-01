@@ -114,7 +114,7 @@ VOIDMAKER_TEST_DATABASE_URL="postgresql:///voidmaker_test?host=$PGHOST" pnpm tes
 ```text
 apps/host/          TypeScript Host 与数据库迁移入口
 apps/shell/         Quickshell/QML 界面
-apps/tools/         ASR 同机评测工具
+apps/tools/         ASR 同机评测、语音语料人工校验工具
 packages/contracts/ UI/Host 协议与 schema
 packages/domain/    纯状态转移与领域规则
 packages/adapters/  Codex、PostgreSQL 等副作用边界
@@ -131,3 +131,22 @@ tests/*.test.ts     TypeScript 单元/集成测试
 ### 设置与诊断
 
 协议 v7 新增「设置」页：语音设备、ASR/TTS、端点参数、原子保存/恢复、只读诊断，以及托盘与 niri 快捷键显隐。保存后立即应用；诊断不录音，隐藏会停止语音。详见 [设置与诊断](docs/SETTINGS_DIAGNOSTICS.md)。
+
+### 语音语料人工校验
+
+```sh
+nix develop
+pnpm voice:review --dataset /path/to/dataset.jsonl
+```
+
+在浏览器打开 `http://127.0.0.1:8766`。逐条试听、修改日文和中文、调整情绪/语气标签，
+使用「保存修改」保留进度，或「确认并下一条」完成本条校验。支持循环、调速、搜索、待复核筛选、
+排除素材，以及全部修正结果或已确认且未排除素材的 CSV / JSONL 导出。
+快捷键为 Ctrl/⌘+S 保存、Ctrl/⌘+Enter 确认下一条、Alt+左右键切换。
+
+输入字段由 `packages/contracts/src/voice-review.ts` 定义；音频使用绝对路径与 SHA-256 对应。
+原始数据集不变，人工修正及各次保存记录原子写入同目录的 `review-state.json`，备份时应一并保存。
+刷新页面或正常重启后恢复进度；多页面保存冲突会保留输入并提示重载。
+服务只监听回环地址，不连接推理服务，也不自动播放或开启麦克风。
+同一数据集只允许一个写入进程；异常退出遗留 `review-state.lock` 时，先确认记录的进程已结束再移除锁文件。
+浏览器回归可用 `VOIDMAKER_REVIEW_BROWSER=1 pnpm test tests/voice-review-browser.test.ts`，需要 Chromium。
