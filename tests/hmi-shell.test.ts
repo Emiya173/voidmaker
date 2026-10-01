@@ -14,7 +14,7 @@ import { initialVoice } from "../packages/domain/src/voice.js";
 import { offscreenShell } from "./helpers/shell.js";
 
 it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
-  "runs compact speech, native transcript editing, drafts and both layouts over real shell IPC",
+  "runs compact speech, transcript editing, layouts and continuous speech across visibility changes over real shell IPC",
   async () => {
     const dir = await mkdtemp(join(tmpdir(), "voidmaker-hmi-"));
     await cp("apps/shell", dir, { recursive: true });
@@ -111,6 +111,11 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
                     voice = voice.continuous
                       ? { ...voice, phase: "speaking", subtitle: "连续回复。" }
                       : { ...voice, phase: "review", transcript: "先整理项目文档。" };
+                    if (voice.continuous)
+                      send(socket, {
+                        type: "message",
+                        message: { id: "hidden-reply", role: "assistant", text: "连续回复。", createdAt: "today" },
+                      });
                     publishVoice(socket);
                   }, 80),
                 );
@@ -180,6 +185,9 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
     property int ticks: 0
     property bool capturing: false
     property string companionGeometry: ""
+    property int hiddenGeneration: -1
+    property int hiddenMessageCount: 0
+    property string hiddenSession: ""
     function geometry() { return [window.width, window.height, art.x, art.y, art.width, art.height].join(",") }
     function separate(item) { return item.x >= art.x + art.width || item.x + item.width <= art.x || item.y >= art.y + art.height || item.y + item.height <= art.y }
     function insist(value, message) { if (!value) throw new Error(message) }
@@ -306,7 +314,10 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
           if (root.phase !== "listening") return
           root.insist(root.continuous && dockContinuous.selected && inputContinuous.selected && !root.chatOpen, "compact start was not continuous or expanded chat")
           root.toggleChat(); root.insist(inputContinuous.selected, "expanded control lost active state"); root.toggleChat()
-          root.microphone(); root.checkStep++; break
+          root.hiddenGeneration = root.voice.generation
+          root.hiddenSession = root.sessionId
+          root.hiddenMessageCount = messages.count
+          root.setVisibility(false); root.checkStep = 31; break
         case 22:
           if (root.phase !== "speaking") return
           root.insist(dockContinuous.enabled && dockContinuous.selected, "cannot stop continuous speech while busy")
@@ -333,8 +344,8 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
         case 27:
           if (root.phase !== "listening") return
           root.insist(!root.continuous && !dockContinuous.selected, "single-turn microphone restarted continuous mode")
-          root.setVisibility(false)
-          console.log("HMI_PASSED"); Qt.quit(); break
+          root.hiddenGeneration = root.voice.generation
+          root.setVisibility(false); root.checkStep = 35; break
         case 28:
           if (root.status !== "idle" || composer.text || composer.pendingText) return
           root.insist(input.editor.text === "" && !composer.desktopId, "sent text or attachment remained in the editor")
@@ -349,6 +360,28 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
           root.insist(input.editor.text === "", "immersive Enter did not clear sent text")
           composer.edit("text", "保留的文字草稿"); composer.attach("fixture-image")
           root.checkStep = 9; break
+        case 31:
+          root.insist(!root.interfaceVisible && !window.visible && transport.connected && root.ready, "hiding disconnected the shell")
+          root.insist(root.phase === "listening" && root.continuous && root.voice.generation === root.hiddenGeneration, "hiding cancelled continuous listening")
+          root.microphone(); root.checkStep++; break
+        case 32:
+          if (root.phase !== "speaking") return
+          root.insist(!root.interfaceVisible && root.continuous && root.reply === "连续回复。", "hidden shell lost speech updates")
+          root.insist(messages.count === root.hiddenMessageCount + 1, "hidden reply missing from conversation")
+          root.setVisibility(true); root.checkStep++; break
+        case 33:
+          root.insist(window.visible && root.continuous && dockContinuous.selected && inputContinuous.selected, "showing reset continuous mode")
+          root.insist(root.sessionId === root.hiddenSession && root.voice.generation === root.hiddenGeneration && !root.chatOpen, "showing changed session, turn or layout")
+          root.setVisibility(false); root.checkStep++; break
+        case 34:
+          root.insist(root.phase === "speaking" && root.continuous && root.reply === "连续回复。", "hiding interrupted playback or cleared the reply")
+          root.setVisibility(true); root.checkStep = 22; break
+        case 35:
+          root.insist(!root.interfaceVisible && root.phase === "listening" && !root.continuous && transport.connected, "hiding changed single-turn capture")
+          root.setVisibility(true); root.checkStep++; break
+        case 36:
+          root.insist(root.phase === "listening" && !root.continuous && root.voice.generation === root.hiddenGeneration, "showing reset single-turn capture")
+          console.log("HMI_PASSED"); Qt.quit(); break
         }
       } catch (error) { console.log("HMI_FAILED: " + error); Qt.quit() }
     } }
@@ -378,7 +411,8 @@ it.skipIf(process.env.VOIDMAKER_SHELL_SMOKE !== "1")(
         "text",
         "text",
       ]);
-      expect(commands.filter((command) => command.type === "stop")).toHaveLength(3);
+      expect(commands.filter((command) => command.type === "stop")).toHaveLength(2);
+      expect(commands.filter((command) => command.type === "hello")).toHaveLength(1);
       expect(commands.filter((command) => command.type === "voice_start").map((command) => command.continuous)).toEqual(
         [false, true, true, true, false],
       );

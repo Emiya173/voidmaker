@@ -71,7 +71,7 @@ Host 用 TypeScript `dbus-next` 导出 StatusNotifierItem 及 `com.canonical.dbu
 菜单读取、展开和悬停均不触发操作，只有菜单项点击才执行。仍保留 `ContextMenu` 直接打开设置的回调。
 宿主延迟启动或重启后会重新注册；会话总线本身断开后需重启 Host。无托盘宿主也可使用快捷键。
 
-界面「隐藏」按钮、托盘及以下 IPC 命令会同时控制主面板和角色层。隐藏时发出停止命令，停止语音采集/播报，并将桌面观察的 UI presence 标记为不活跃。后台任务继续运行。
+界面「隐藏」按钮、托盘及以下 IPC 命令会同时控制主面板和角色层。隐藏保留当前录音、播报与连续对话，重新显示时沿用同一会话、语音轮次和界面状态；隐藏期间的消息仍会更新。桌面观察的 UI presence 标记为不活跃，后台任务继续运行。要结束语音可使用托盘「停止当前对话（含语音）」；锁屏、连接断开或完整退出仍会停止采集。
 
 ```sh
 quickshell --path /absolute/path/to/VoidMaker/apps/shell/shell.qml ipc call voidmaker toggle

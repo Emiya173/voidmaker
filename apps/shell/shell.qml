@@ -52,7 +52,6 @@ ShellRoot {
     Timer { id: replyDelay; interval: 5000; onTriggered: root.reply = "" }
 
     function setVisibility(value) {
-        if (!value && interfaceVisible) { send({type: "stop"}); replyDelay.stop(); reply = "" }
         interfaceVisible = value
         send({type: "desktop_presence", idle: !value || activity.isIdle})
     }
@@ -266,7 +265,7 @@ ShellRoot {
                 IconButton { visible: !stage.narrow; glyph: "history"; label: "会话与记忆"; selected: root.drawerPage === "history"; onClicked: root.togglePage("history") }
                 IconButton { glyph: "work"; label: "后台任务"; selected: root.drawerPage === "work"; onClicked: root.togglePage("work") }
                 IconButton { visible: !stage.narrow; glyph: "settings"; label: "设置"; selected: root.drawerPage === "settings"; onClicked: root.togglePage("settings") }
-                IconButton { visible: !stage.narrow; glyph: "hide"; label: "隐藏并停止当前对话"; onClicked: root.setVisibility(false) }
+                IconButton { visible: !stage.narrow; glyph: "hide"; label: "隐藏界面，保留语音对话"; onClicked: root.setVisibility(false) }
             }
 
             CutPanel {
