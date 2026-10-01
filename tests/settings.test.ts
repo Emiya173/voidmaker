@@ -130,6 +130,43 @@ it("distinguishes readiness, warmup, metadata-only reachability and model mismat
     "unconfigured",
   );
 });
+it("reads shared TTS model metadata with Japanese output without performing synthesis", async () => {
+  const model = { gptWeightsPath: "/chiaki/gpt.ckpt", sovitsWeightsPath: "/chiaki/sovits.pth" };
+  const config = voiceConfigSchema.parse({
+    tts: {
+      url: "http://127.0.0.1:9880/tts",
+      healthUrl: "http://127.0.0.1:9880/health",
+      refAudioPath: "/reference.wav",
+      promptText: "こんにちは。",
+      promptLanguage: "ja",
+      textLanguage: "ja",
+      model,
+    },
+  });
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  for (const [health, status] of [
+    [{ ready: true, model }, "ready"],
+    [{ ready: false, model }, "warming"],
+    [{ ready: false, model: null }, "warming"],
+    [{ ready: false }, "warming"],
+    [{ ready: true, model: "gpt-sovits" }, "ready"],
+    [{ model }, "reachable"],
+  ] as const) {
+    fetch.mockResolvedValueOnce(new Response(JSON.stringify(health)));
+    expect((await inspectModel("tts", config, new AbortController().signal)).status).toBe(status);
+  }
+  expect(fetch.mock.calls.every(([url, options]) => url === config.tts?.healthUrl && !options.method)).toBe(true);
+  fetch.mockResolvedValueOnce(new Response(JSON.stringify({ ready: false, model: null }), { status: 503 }));
+  await expect(inspectModel("tts", config, new AbortController().signal)).rejects.toThrow("HTTP 503");
+  for (const invalid of [{ gptWeightsPath: model.gptWeightsPath }, { ...model, sovitsWeightsPath: "relative.pth" }]) {
+    fetch.mockResolvedValueOnce(new Response(JSON.stringify({ ready: true, model: invalid })));
+    await expect(inspectModel("tts", config, new AbortController().signal)).rejects.toThrow();
+  }
+  const asr = voiceConfigSchema.parse({ asr: { url: "http://127.0.0.1:8000/v1/audio/transcriptions" } });
+  fetch.mockResolvedValueOnce(new Response(JSON.stringify({ ready: true, model })));
+  await expect(inspectModel("asr", asr, new AbortController().signal)).rejects.toThrow();
+});
 it("filters audio device metadata without creating capture streams", () => {
   expect(
     audioDevices([

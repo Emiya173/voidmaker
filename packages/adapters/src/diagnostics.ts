@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
 import type { AudioDevice, DiagnosticResult } from "../../contracts/src/settings.js";
-import type { VoiceConfig } from "../../contracts/src/voice.js";
+import { speechModelSchema, type VoiceConfig } from "../../contracts/src/voice.js";
 import { pipeWireGraphSchema } from "./pipewire-graph.js";
 
 const exec = promisify(execFile);
@@ -69,7 +69,12 @@ export async function inspectModel(
     if (!(new URL(endpoint.url).pathname in doc.paths)) throw new Error("服务未声明配置的合成接口");
     return { id, label, status: "reachable", detail: "合成接口可连接；未生成音频，模型预热与参考声音未验证" };
   }
-  const health = z.object({ ready: z.boolean().optional(), model: z.string().optional() }).parse(value);
+  const health = z
+    .object({
+      ready: z.boolean().optional(),
+      model: id === "tts" ? z.union([z.string(), speechModelSchema]).nullish() : z.string().optional(),
+    })
+    .parse(value);
   if (id === "asr" && health.model && health.model !== config.asr?.model) throw new Error("服务报告的模型与配置不一致");
   return {
     id,
