@@ -1,6 +1,8 @@
 [Unit]
 Description=VoidMaker shared GPT-SoVITS speech synthesis
 After=graphical-session.target
+PartOf=voidmaker.target
+StopWhenUnneeded=yes
 
 [Service]
 Type=simple
@@ -10,6 +12,4 @@ ExecStart=/run/current-system/sw/bin/nix develop --command .venv/bin/python void
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=15
-
-[Install]
-WantedBy=default.target
+KillMode=control-group

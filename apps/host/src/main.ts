@@ -24,6 +24,7 @@ import { CodexAppServer } from "../../../packages/adapters/src/codex.js";
 import { Database } from "../../../packages/adapters/src/database.js";
 import { desktopAdapters } from "../../../packages/adapters/src/desktop.js";
 import { suggestDesktop } from "../../../packages/adapters/src/desktop-codex.js";
+import { exitDesktop } from "../../../packages/adapters/src/desktop-lifecycle.js";
 import { DesktopStore } from "../../../packages/adapters/src/desktop-store.js";
 import { desktopTool, desktopToolProfile } from "../../../packages/adapters/src/desktop-tool.js";
 import { inspectAec, inspectDevices, inspectModel } from "../../../packages/adapters/src/diagnostics.js";
@@ -109,7 +110,14 @@ class Host {
     this.broadcast({ type: "diagnostics", diagnostics }),
   );
   private readonly tray = new TrayService((action) => {
-    if (action.type === "stop") {
+    if (action.type === "exit") {
+      void exitDesktop().catch((error: unknown) =>
+        this.broadcast({
+          type: "error",
+          message: `退出失败：${error instanceof Error ? error.message : String(error)}`,
+        }),
+      );
+    } else if (action.type === "stop") {
       void this.stop().catch((error: unknown) =>
         this.broadcast({ type: "error", message: error instanceof Error ? error.message : String(error) }),
       );

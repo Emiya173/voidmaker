@@ -79,7 +79,8 @@ quickshell --path apps/shell/shell.qml
 ```
 
 Host 的 socket 默认在 `$XDG_RUNTIME_DIR/voidmaker/host.sock`，也可通过 `VOIDMAKER_SOCKET` 覆盖。
-UI 重载或退出不会停止 Host；最后一个 UI 断开时停止语音并退出连续模式。普通聊天线程使用只读沙箱；需要进一步权限时在 UI 中允许或拒绝。
+手动分开启动时，UI 断开会停止语音并退出连续模式，Host 保持运行。使用下述 systemd 服务组时，退出会联动停止整组服务。
+界面热重载与隐藏仍保留 Host；完整退出使用托盘「退出 VoidMaker」或停止 `voidmaker.target`。
 聊天工作目录为 `$XDG_STATE_HOME/voidmaker/chat`（默认 `~/.local/state/voidmaker/chat`），
 避免把应用源码目录作为日常聊天上下文。模型配置读取 `~/.config/voidmaker/config.toml`，见
 [配置示例](docs/config.example.toml)：聊天及朗读台词使用 `gpt-6-sol / medium`，主动观察使用 `gpt-6-luna / high`。
@@ -88,8 +89,11 @@ UI 重载或退出不会停止 Host；最后一个 UI 断开时停止语音并�
 恢复旧聊天线程失败时，会从 VoidMaker 数据库注入近期记录与已启用记忆，显示历史保留。
 全局快捷键和位置由 niri 配置；新面板使用 layer-shell 屏幕锚点。
 
-[systemd 用户服务模板](docs/voidmaker-host.service)可用于常驻运行，安装前需按实际仓库目录调整
-`WorkingDirectory`，并在 `~/.config/voidmaker/host.env` 设置数据库连接。模板不会自动安装或启用。
+[systemd 用户服务组](docs/systemd/voidmaker.target)统一管理界面、Host、私有 PostgreSQL、Qwen ASR 和唯一的 GPT-SoVITS 服务。
+安装 `docs/systemd/voidmaker.target`、五个服务模板（Host 位于 `docs/voidmaker-host.service`）后执行 `systemctl --user daemon-reload`。
+按实际目录和数据库配置调整模板；用 `systemctl --user start voidmaker.target` 启动、`stop voidmaker.target` 退出、`restart voidmaker.target` 完整重启。
+启动器 `.desktop` 使用同一 target；退出界面进程或停止 Host 也会清理该组，不会留下模型进程占用显存。
+只在需要随桌面登录启动时启用 target，不要单独启用各个模型服务。语料人工校验服务独立运行，不属于此组。
 
 ## 验证
 

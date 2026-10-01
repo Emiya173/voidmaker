@@ -1,6 +1,8 @@
 [Unit]
 Description=VoidMaker Qwen3-ASR-0.6B ROCm inference
 After=graphical-session.target
+PartOf=voidmaker.target
+StopWhenUnneeded=yes
 
 [Service]
 Type=simple
@@ -12,6 +14,4 @@ ExecStart=/run/current-system/sw/bin/nix develop --command .venv/bin/python -m u
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
-
-[Install]
-WantedBy=default.target
+KillMode=control-group

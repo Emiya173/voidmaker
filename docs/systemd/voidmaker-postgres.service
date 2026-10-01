@@ -1,5 +1,7 @@
 [Unit]
 Description=VoidMaker private PostgreSQL
+PartOf=voidmaker.target
+StopWhenUnneeded=yes
 
 [Service]
 Type=simple
@@ -7,10 +9,10 @@ WorkingDirectory=%h/dev/VoidMaker
 RuntimeDirectory=voidmaker-postgres
 RuntimeDirectoryMode=0700
 ExecStart=/run/current-system/sw/bin/nix develop --command postgres -D %h/.local/state/voidmaker/postgres -k %t/voidmaker-postgres -c listen_addresses=
+# Type=simple starts before PostgreSQL has created its socket; Host waits for this probe.
+ExecStartPost=/run/current-system/sw/bin/nix develop --command bash -c 'until pg_isready -q -h %t/voidmaker-postgres -d voidmaker; do sleep 0.2; done'
+TimeoutStartSec=45
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30
 KillSignal=SIGINT
-
-[Install]
-WantedBy=default.target

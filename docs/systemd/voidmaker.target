@@ -1,0 +1,8 @@
+[Unit]
+Description=VoidMaker desktop assistant and local inference
+PartOf=graphical-session.target
+BindsTo=voidmaker-shell.service voidmaker-host.service
+After=graphical-session.target voidmaker-shell.service voidmaker-host.service
+
+[Install]
+WantedBy=graphical-session.target

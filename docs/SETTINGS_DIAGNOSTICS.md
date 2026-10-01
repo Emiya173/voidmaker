@@ -66,6 +66,7 @@ Host 用 TypeScript `dbus-next` 导出 StatusNotifierItem 及 `com.canonical.dbu
 | 停止当前对话（含语音） | 直接由 Host 停止当前回复、录音、播报与连续监听；不取消后台任务，不改变面板显隐 |
 | 设置 | 显示设置的配置子页 |
 | 服务诊断 | 显示设置的诊断子页，由用户点击检查按钮启动只读检查 |
+| 退出 VoidMaker | 停止 `voidmaker.target`，关闭界面、Host 和本地推理服务，释放显存 |
 
 菜单读取、展开和悬停均不触发操作，只有菜单项点击才执行。仍保留 `ContextMenu` 直接打开设置的回调。
 宿主延迟启动或重启后会重新注册；会话总线本身断开后需重启 Host。无托盘宿主也可使用快捷键。
@@ -79,7 +80,9 @@ quickshell --path /absolute/path/to/VoidMaker/apps/shell/shell.qml ipc call void
 quickshell --path /absolute/path/to/VoidMaker/apps/shell/shell.qml ipc call voidmaker settings
 ```
 
-niri `binds` 示例（替换绝对路径；界面服务须已运行）：
+完整退出使用托盘「退出 VoidMaker」或 `systemctl --user stop voidmaker.target`。本机 Nix 配置的 Mod+A 只切换界面显隐，保留 Host 和模型服务；尚未启动时启动 `voidmaker.target` 并显示界面，长按不连发。
+
+以下 niri `binds` 示例只控制显隐和设置（替换绝对路径；界面服务须已运行）：
 
 ```kdl
 binds {

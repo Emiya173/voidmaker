@@ -38,7 +38,7 @@ try {
   const menu=(await client.getProxyObject(trayName,menuPath)).getInterface('com.canonical.dbusmenu');
   const [revision,layout]=await menu.GetLayout(0,-1,[]);
   assert.equal(revision,1);assert.equal(layout[0],0);
-  assert.deepEqual(layout[2].filter(child=>child.value[1].label).map(child=>child.value[1].label.value),['显示/隐藏 VoidMaker','对话','后台任务','会话与记忆','桌面感知','停止当前对话（含语音）','设置','服务诊断']);
+  assert.deepEqual(layout[2].filter(child=>child.value[1].label).map(child=>child.value[1].label.value),['显示/隐藏 VoidMaker','对话','后台任务','会话与记忆','桌面感知','停止当前对话（含语音）','设置','服务诊断','退出 VoidMaker']);
   assert.equal((await menu.GetLayout(0,0,[]))[1][2].length,0);
   assert.deepEqual(Object.keys((await menu.GetLayout(2,-1,['label']))[1][1]),['label']);
   assert.equal((await menu.GetProperty(2,'label')).value,'设置');
@@ -48,7 +48,7 @@ try {
   await menu.Event(2,'hovered',new dbus.Variant('i',0),0);
   await menu.Event(0,'opened',new dbus.Variant('i',0),0);
   await menu.Event(10,'clicked',new dbus.Variant('i',0),0);
-  assert.equal(layout[2].filter(child=>child.value[1].type?.value==='separator').length,3);
+  assert.equal(layout[2].filter(child=>child.value[1].type?.value==='separator').length,4);
   assert.deepEqual(actions,[{type:'toggle'},{type:'open',page:'settings'}]);
   await assert.rejects(menu.Event(999,'clicked',new dbus.Variant('i',0),0));
   await menu.Event(2,'clicked',new dbus.Variant('i',0),0);
@@ -58,7 +58,7 @@ try {
   await host.requestName(watcherName,4);await wait(()=>registered===2);assert.equal(tray.status.status,'ready');
   await menu.Event(2,'clicked',new dbus.Variant('i',0),0);
   assert.deepEqual(actions,[{type:'toggle'},{type:'open',page:'settings'},{type:'open',page:'settings'},{type:'toggle'},{type:'open',page:'settings'}]);
-  for (const [id,action] of [[3,{type:'open',page:'chat'}],[4,{type:'open',page:'work'}],[5,{type:'open',page:'history'}],[6,{type:'open',page:'desktop'}],[7,{type:'stop'}],[8,{type:'open',page:'diagnostics'}]]) {
+  for (const [id,action] of [[3,{type:'open',page:'chat'}],[4,{type:'open',page:'work'}],[5,{type:'open',page:'history'}],[6,{type:'open',page:'desktop'}],[7,{type:'stop'}],[8,{type:'open',page:'diagnostics'}],[9,{type:'exit'}]]) {
     await menu.Event(id,'clicked',new dbus.Variant('i',0),0);
     assert.deepEqual(actions.at(-1),action);
   }

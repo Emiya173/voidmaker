@@ -17,6 +17,8 @@ const entries: readonly Entry[] = [
   { id: 12, separator: true },
   { id: 2, label: "设置", action: { type: "open", page: "settings" } },
   { id: 8, label: "服务诊断", action: { type: "open", page: "diagnostics" } },
+  { id: 13, separator: true },
+  { id: 9, label: "退出 VoidMaker", action: { type: "exit" } },
 ];
 const validId = (id: number): boolean => id === 0 || entries.some((entry) => entry.id === id);
 const requireId = (id: number): void => {

@@ -1,8 +1,10 @@
 [Unit]
 Description=VoidMaker TypeScript assistant Host
 Requires=voidmaker-postgres.service
-After=voidmaker-postgres.service graphical-session.target
+After=voidmaker-postgres.service voidmaker-asr.service voidmaker-tts.service graphical-session.target
 Wants=voidmaker-asr.service voidmaker-tts.service
+PartOf=voidmaker.target
+StopWhenUnneeded=yes
 
 [Service]
 Type=simple
@@ -14,6 +16,3 @@ Restart=on-failure
 RestartSec=3
 TimeoutStopSec=30
 KillMode=control-group
-
-[Install]
-WantedBy=default.target
