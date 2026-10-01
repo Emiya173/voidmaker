@@ -82,7 +82,7 @@ export class CharacterController {
     this.controller.signal.throwIfAborted();
     // Restoring the initial character must not block text chat on a cold/unavailable TTS service.
     // Synthesis always verifies the desired model again, including after a service restart.
-    if (this.binding.threadId) await this.ports.prepareVoice?.(character, signal);
+    if (this.binding.threadId && this.current.id !== character.id) await this.ports.prepareVoice?.(character, signal);
     this.controller.signal.throwIfAborted();
     await this.ports.persist(character.id, binding);
     this.controller.signal.throwIfAborted();

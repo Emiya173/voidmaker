@@ -111,7 +111,9 @@ ColumnLayout {
                 Label { Layout.fillWidth: true; text: (modelData.id === root.sessionId ? "● " : "") + modelData.title
                     color: "#eee"; textFormat: Text.PlainText; elide: Text.ElideRight }
                 RowLayout {
-                    Button { text: "切换"; enabled: root.canEdit && !modelData.archived && modelData.id !== root.sessionId
+                    Button { objectName: "select-session-" + modelData.id
+                        text: modelData.id === root.sessionId ? "当前" : "切换"
+                        enabled: root.canEdit && !modelData.archived && modelData.id !== root.sessionId
                         onClicked: root.command({type: "session_select", id: modelData.id}) }
                     Button { text: "历史"; enabled: root.online
                         onClicked: { root.historySession = modelData.id; root.historyTitle = modelData.title; historySearch.text = ""; root.listHistory(); sections.currentIndex = 1 } }

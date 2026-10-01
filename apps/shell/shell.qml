@@ -81,6 +81,7 @@ ShellRoot {
         else dockExpand.forceActiveFocus()
     }
     function send(command) {
+        if (["session_select", "session_create", "character_select"].includes(command.type)) errorText = ""
         if (transport.connected) transport.send(command)
     }
     function submit(source) {
@@ -399,6 +400,11 @@ ShellRoot {
                     RowLayout {
                         Label { text: ({work: "后台任务", desktop: "桌面上下文", history: "会话与记忆", settings: "设置"})[root.drawerPage] || ""; color: theme.pink; font.pixelSize: 20; Layout.fillWidth: true }
                         IconButton { glyph: "close"; label: "关闭面板"; onClicked: root.drawerPage = "" }
+                    }
+                    Label {
+                        Layout.fillWidth: true; visible: !!root.errorText || (!!root.character && root.character.changing)
+                        text: root.errorText || "切换中…"; textFormat: Text.PlainText; wrapMode: Text.Wrap
+                        color: root.errorText ? theme.warning : theme.muted
                     }
                     Label {
                         Layout.fillWidth: true

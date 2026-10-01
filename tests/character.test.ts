@@ -424,6 +424,29 @@ it("projects toon settings and rejects missing or escaping ramp textures", async
   expect(catalog.entries[1]?.avatar).toBeUndefined();
   expect(catalog.warnings).toHaveLength(1);
 });
+it("switches sessions within the same character without depending on TTS readiness", async () => {
+  const prepareVoice = vi.fn(async () => {
+    throw new Error("TTS is offline");
+  });
+  const controller = new CharacterController(
+    { entries: [defaultCharacter], warnings: [] },
+    {
+      idle: () => true,
+      prepare: async (character, _signal, sessionId) => ({ sessionId: sessionId ?? "initial", threadId: character.id }),
+      prepareVoice,
+      persist: async () => {},
+      publish: () => {},
+    },
+  );
+  await controller.select("default");
+  await controller.select("default", "another");
+  expect(controller.binding.sessionId).toBe("another");
+  await controller.select("default", async () => "created");
+  expect(controller.binding.sessionId).toBe("created");
+  expect(prepareVoice).not.toHaveBeenCalled();
+  await controller.close();
+});
+
 it("waits for voice model selection, preserves the old character on failure and ignores completion after shutdown", async () => {
   const other = { ...defaultCharacter, id: "other", name: "Other" };
   let finish!: () => void;
