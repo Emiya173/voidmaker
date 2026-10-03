@@ -1,6 +1,6 @@
 import type { VoiceAudioSession } from "../../../packages/adapters/src/aec-session.js";
 import type { Capture, PlaybackProgress } from "../../../packages/adapters/src/audio-process.js";
-import type { SpeechSegment, WaitingClip } from "../../../packages/contracts/src/speech.js";
+import type { SpeechReference, SpeechSegment, WaitingClip } from "../../../packages/contracts/src/speech.js";
 import type { VoiceSnapshot } from "../../../packages/contracts/src/voice.js";
 import { initialVoice, type VoiceEvent, voiceTransition } from "../../../packages/domain/src/voice.js";
 
@@ -11,7 +11,7 @@ export type VoicePorts = Readonly<{
   waitingClip?: () => WaitingClip | undefined;
   recordedClip?: (id: string) => Buffer | undefined;
   interruptReply?: () => Promise<void>;
-  synthesize: (text: string, signal: AbortSignal, referenceId?: string) => Promise<Buffer>;
+  synthesize: (text: string, signal: AbortSignal, referenceId?: string, reference?: SpeechReference) => Promise<Buffer>;
   play: (wav: Buffer, signal: AbortSignal, onProgress: (progress: PlaybackProgress) => void) => Promise<void>;
   submit: (text: string) => Promise<void>;
   canAutoSubmit?: () => boolean;
@@ -210,12 +210,20 @@ export class VoiceController {
         this.dispatch({ type: "stage", generation, phase: "thinking", subtitle: "" });
     }
   }
-  async speak(segments: readonly SpeechSegment[], generation: number): Promise<void> {
+  async speak(
+    segments: readonly SpeechSegment[],
+    generation: number,
+    references: readonly SpeechReference[] = [],
+  ): Promise<void> {
     if (!this.current(generation)) return;
-    this.pending = this.speakTurn(segments, generation);
+    this.pending = this.speakTurn(segments, generation, references);
     await this.pending;
   }
-  private async speakTurn(segments: readonly SpeechSegment[], generation: number): Promise<void> {
+  private async speakTurn(
+    segments: readonly SpeechSegment[],
+    generation: number,
+    references: readonly SpeechReference[],
+  ): Promise<void> {
     const prefetch = new AbortController();
     const signal = AbortSignal.any([this.controller.signal, prefetch.signal]);
     type Prepared = { ok: true; wav: Buffer } | { ok: false; error: unknown };
@@ -228,7 +236,15 @@ export class VoiceController {
           if (!wav) throw new Error("句首原声不可用");
           return { ok: true, wav };
         }
-        return { ok: true, wav: await this.ports.synthesize(segment.text, signal, segment.referenceId) };
+        return {
+          ok: true,
+          wav: await this.ports.synthesize(
+            segment.text,
+            signal,
+            segment.referenceId,
+            references.find((r) => r.id === segment.referenceId),
+          ),
+        };
       } catch (error) {
         return { ok: false, error };
       }

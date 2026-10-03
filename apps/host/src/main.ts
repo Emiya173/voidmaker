@@ -19,6 +19,7 @@ import {
   replyFormat,
   replyInstructions,
   replyText,
+  speechReferenceInstructions,
 } from "../../../packages/adapters/src/chat-reply.js";
 import { CodexAppServer } from "../../../packages/adapters/src/codex.js";
 import { Database } from "../../../packages/adapters/src/database.js";
@@ -29,6 +30,7 @@ import { DesktopStore } from "../../../packages/adapters/src/desktop-store.js";
 import { desktopTool, desktopToolProfile } from "../../../packages/adapters/src/desktop-tool.js";
 import { inspectAec, inspectDevices, inspectModel } from "../../../packages/adapters/src/diagnostics.js";
 import { HistoryStore } from "../../../packages/adapters/src/history-store.js";
+import { loadReviewedSpeech } from "../../../packages/adapters/src/reviewed-speech.js";
 import { sessionActive } from "../../../packages/adapters/src/session.js";
 import { prepareSynthesis, synthesize, transcribe } from "../../../packages/adapters/src/speech-http.js";
 import { terminalTool } from "../../../packages/adapters/src/terminal-tool.js";
@@ -133,6 +135,7 @@ class Host {
   private readonly presence = new Map<Socket, boolean>();
   private desktopReplyGeneration: number | null = null;
   private terminalGeneration: number | null = null;
+  private referencePreparation: AbortController | undefined;
 
   constructor(
     private readonly database: Database,
@@ -275,10 +278,11 @@ class Host {
         },
         interruptReply: () => this.codex.interrupt(),
         recordedClip: (id) => this.character.current.replyClips?.find((clip) => clip.id === id)?.wav,
-        synthesize: (text, signal, referenceId) => {
+        synthesize: (text, signal, referenceId, pinnedReference) => {
           const config = characterTts(voiceConfig.tts, this.character.current);
           if (!config) throw new Error("未配置 TTS");
-          const reference = this.character.current.speechReferences?.find((entry) => entry.id === referenceId);
+          const reference =
+            pinnedReference ?? this.character.current.speechReferences?.find((entry) => entry.id === referenceId);
           return synthesize(text, { ...config, textLanguage: this.config.speech.language }, signal, reference);
         },
         play: (wav, signal, onProgress) =>
@@ -328,6 +332,7 @@ class Host {
   }
 
   async close(): Promise<void> {
+    this.referencePreparation?.abort();
     this.sessionGuard.close();
     this.tray.close();
     this.diagnostics.cancel(false);
@@ -600,6 +605,13 @@ class Host {
           label: id.toUpperCase(),
           run: (signal: AbortSignal) => inspectModel(id, config, signal),
         })),
+        {
+          id: "reviewed-speech",
+          label: "人工复核语音参考",
+          run: async (signal) =>
+            (await loadReviewedSpeech(this.config.speech.reviewed_datasets[this.character.current.id], signal))
+              .diagnostic,
+        },
         { id: "aec", label: "AEC 插件", run: () => inspectAec(config) },
         {
           id: "routing",
@@ -758,19 +770,30 @@ class Host {
     const binding = this.character.binding;
     const character = this.character.current;
     const voiceGeneration = this.voice.beginReply();
+    const preparation = new AbortController();
+    this.referencePreparation = preparation;
     this.state = transition(this.state, { type: "send" });
     const generation = this.state.generation;
     if (!observed) this.terminalGeneration = generation;
     if (desktopId || observed) this.desktopReplyGeneration = generation;
     this.broadcast({ type: "status", status: "thinking" });
     try {
+      const dataset = this.config.speech.reviewed_datasets[character.id];
+      const reviewed = await loadReviewedSpeech(dataset, preparation.signal);
+      const reviewedIds = new Set(reviewed.references.map((reference) => reference.id));
+      const references = [
+        ...reviewed.references,
+        ...(character.speechReferences ?? []).filter((reference) => !reviewedIds.has(reference.id)),
+      ];
+      if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
       const oldThread = await this.database.ensureSession(binding.sessionId);
       const threadId = oldThread ?? (await this.prepareThread(character, binding.sessionId));
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
       const shared = observed ?? (desktopId ? await this.desktop.share(desktopId) : undefined);
       shared?.signal.throwIfAborted();
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
-      const prompt = shared ? contextPrompt(text, shared.context) : text;
+      const content = shared ? contextPrompt(text, shared.context) : text;
+      const prompt = dataset ? `${speechReferenceInstructions(references)}\n\n${content}` : content;
       const message = observed
         ? undefined
         : await this.database.addMessage(
@@ -781,11 +804,7 @@ class Host {
       if (composed) this.updateComposer({ type: "consumed", submission: composed }, undefined, binding.sessionId);
       if (message) this.broadcast({ type: "message", message });
       if (this.state.phase !== "thinking" || this.state.generation !== generation) return;
-      const format = replyFormat(
-        character.speechReferences ?? [],
-        character.portraitExpressions ?? [],
-        character.replyClips ?? [],
-      );
+      const format = replyFormat(references, character.portraitExpressions ?? [], character.replyClips ?? []);
       const stream = new ReplyStream(format);
       let invalidStream = false;
       const rawReply = await this.codex.run(
@@ -817,7 +836,7 @@ class Host {
         const assistantMessage = await this.database.addMessage(binding.sessionId, "assistant", reply);
         this.broadcast({ type: "message", message: assistantMessage });
         if (this.state.phase === "thinking" && this.state.generation === generation)
-          await this.voice.speak(segments, voiceGeneration);
+          await this.voice.speak(segments, voiceGeneration, references);
       } else {
         await this.voice.speak([], voiceGeneration);
       }
@@ -831,6 +850,10 @@ class Host {
         }
       }
     } finally {
+      if (this.referencePreparation === preparation) {
+        preparation.abort();
+        this.referencePreparation = undefined;
+      }
       if (this.terminalGeneration === generation) this.terminalGeneration = null;
       if (this.desktopReplyGeneration === generation) this.desktopReplyGeneration = null;
       if (this.state.phase === "thinking" && this.state.generation === generation) {
@@ -845,6 +868,7 @@ class Host {
   }
 
   private async stop(): Promise<void> {
+    this.referencePreparation?.abort();
     if (this.state.phase !== "thinking") {
       await this.voice.cancel();
       return;

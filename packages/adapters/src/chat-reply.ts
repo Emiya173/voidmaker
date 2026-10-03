@@ -56,7 +56,7 @@ export function replyInstructions(
   portraits: readonly PortraitExpression[],
   clips: readonly ReplyClip[] = [],
 ): string {
-  return `\n回复输出约定（仅供内部使用，不向用户解释）：一次生成完整回复及朗读台词，按字段顺序返回 {"openingClipId":"none","segments":[{"subtitle":"中文字幕","text":"${language === "ja" ? "自然口语日语" : "自然口语中文"}","referenceId":"neutral","portraitId":"neutral"}]}。subtitle 是界面与历史记录显示的中文，text 是实际朗读的${language === "ja" ? "日语，不能直接填写中文" : "中文"}。同段两种语言的事实、数字、限定和语气必须一致；不要先答中文再要求额外翻译。每段一至两句短句，普通对话尽量简洁，按叙述顺序分段；保留用户需要的事实、代码或列表。根据完整对话语境与本段回应意图选择参考音频和表情，只使用下方已有 ID。关心或安慰用关切、温柔；解释用引导、认真；明确好消息才用兴奋；避免夸张、无理由频繁变脸。没有合适匹配使用 neutral。不要把语气标签、表情名、设定说明写进台词。\nopeningClipId 默认 none。仅当下方某句原声的完整含义和语气适合作为本次正式回复开头时选择它，最多一句，不要为了使用素材而强行道歉、赞同或拒绝。原声会直接播放，其固定中文字幕会自动放入回复和历史；segments 仅写接续内容，不要再次写出或合成原声已表达的意思。若原声已经完整回答，可以返回空 segments。等待期间的中性短音不由此字段选择。\n${JSON.stringify(
+  return `\n回复输出约定（仅供内部使用，不向用户解释）：一次生成完整回复及朗读台词，按字段顺序返回 {"openingClipId":"none","segments":[{"subtitle":"中文字幕","text":"${language === "ja" ? "自然口语日语" : "自然口语中文"}","referenceId":"neutral","portraitId":"neutral"}]}。subtitle 是界面与历史记录显示的中文，text 是实际朗读的${language === "ja" ? "日语，不能直接填写中文" : "中文"}。同段两种语言的事实、数字、限定和语气必须一致；不要先答中文再要求额外翻译。每段一至两句短句，普通对话尽量简洁，按叙述顺序分段；保留用户需要的事实、代码或列表。根据完整对话语境与本段回应意图选择参考音频和表情，只使用下方目录中的 ID；若本轮提供更新后的语音参考目录，referenceId 以本轮目录为准。关心或安慰用关切、温柔；解释用引导、认真；明确好消息才用兴奋；避免夸张、无理由频繁变脸。没有合适匹配使用 neutral。不要把语气标签、表情名、设定说明写进台词。\nopeningClipId 默认 none。仅当下方某句原声的完整含义和语气适合作为本次正式回复开头时选择它，最多一句，不要为了使用素材而强行道歉、赞同或拒绝。原声会直接播放，其固定中文字幕会自动放入回复和历史；segments 仅写接续内容，不要再次写出或合成原声已表达的意思。若原声已经完整回答，可以返回空 segments。等待期间的中性短音不由此字段选择。\n${JSON.stringify(
     {
       references: [
         { id: "neutral", description: "自然平静的默认语气" },
@@ -68,6 +68,16 @@ export function replyInstructions(
       ],
       openingClips: clips.map(({ id, description, text, subtitle }) => ({ id, description, text, subtitle })),
     },
+  )}`;
+}
+
+/** Only style labels enter model context; reference recordings and transcripts stay local to TTS. */
+export function speechReferenceInstructions(references: readonly SpeechReference[]): string {
+  return `本轮语音参考目录（内部使用，以本轮目录为准）：根据每段回应的情绪和说话方式选择 referenceId，优先匹配人工复核的语气。参考仅控制声音表现，不改变回答事实或引入原作台词；不要说出标签或参考 ID。不匹配时使用 neutral。\n${JSON.stringify(
+    [
+      { id: "neutral", description: "自然平静的默认语气" },
+      ...references.map(({ id, description }) => ({ id, description })),
+    ],
   )}`;
 }
 

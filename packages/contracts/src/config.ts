@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 
 export const reasoningEffort = z.enum(["none", "minimal", "low", "medium", "high", "xhigh"]);
@@ -15,6 +16,13 @@ export const applicationConfig = z.object({
       precheck_reasoning_effort: reasoningEffort.default("high"),
     })
     .prefault({}),
-  speech: z.object({ language: z.enum(["ja", "zh"]).default("ja") }).prefault({}),
+  speech: z
+    .object({
+      language: z.enum(["ja", "zh"]).default("ja"),
+      reviewed_datasets: z
+        .record(z.string().regex(/^[a-z0-9_-]{1,80}$/), z.string().refine(isAbsolute, "校验数据集须为绝对路径"))
+        .default({}),
+    })
+    .prefault({}),
 });
 export type ApplicationConfig = z.infer<typeof applicationConfig>;

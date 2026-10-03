@@ -59,7 +59,7 @@ describe("voice lifecycle", () => {
     const speaking = voice.speak([opener, rest], voice.beginReply());
     await vi.waitFor(() => expect(ports.play).toHaveBeenCalledOnce());
     expect(ports.play).toHaveBeenCalledWith(recording, expect.any(AbortSignal), expect.any(Function));
-    expect(ports.synthesize).toHaveBeenCalledExactlyOnceWith(rest.text, expect.any(AbortSignal), "warm");
+    expect(ports.synthesize).toHaveBeenCalledExactlyOnceWith(rest.text, expect.any(AbortSignal), "warm", undefined);
     expect(ports.present).toHaveBeenCalledExactlyOnceWith(opener);
     expect(voice.snapshot.subtitle).toBe("对不起。");
     playing.resolve();
@@ -263,7 +263,7 @@ describe("voice lifecycle", () => {
       [{ subtitle: "不用着急。", text: "焦らなくていいよ。", referenceId: "warm", portraitId: "gentle" }],
       voice.beginReply(),
     );
-    expect(ports.synthesize).toHaveBeenCalledWith("焦らなくていいよ。", expect.any(AbortSignal), "warm");
+    expect(ports.synthesize).toHaveBeenCalledWith("焦らなくていいよ。", expect.any(AbortSignal), "warm", undefined);
     expect(ports.publish).toHaveBeenCalledWith(expect.objectContaining({ phase: "speaking", subtitle: "不用着急。" }));
     expect(ports.present).toHaveBeenCalledWith(expect.objectContaining({ portraitId: "gentle" }));
   });

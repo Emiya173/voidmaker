@@ -5,6 +5,7 @@ import {
   replyFormat,
   replyInstructions,
   replyText,
+  speechReferenceInstructions,
 } from "../packages/adapters/src/chat-reply.js";
 
 const references = [
@@ -107,4 +108,13 @@ it("provides a single bilingual response contract with character-specific choice
   expect(instructions).toContain('"gentle"');
   expect(replyInstructions("zh", [], [])).toContain("自然口语中文");
   expect(JSON.stringify(replyFormat([], []).schema)).not.toContain('"warm"');
+});
+
+it("gives the model only the current reference IDs and style labels, keeping source transcripts local", () => {
+  const prompt = speechReferenceInstructions(references);
+  expect(prompt).toContain("优先匹配人工复核");
+  expect(prompt).toContain('"id":"warm"');
+  expect(prompt).toContain("温和");
+  expect(prompt).not.toContain("/ref.wav");
+  expect(prompt).not.toContain("参考台词");
 });

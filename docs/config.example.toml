@@ -13,5 +13,9 @@ precheck_reasoning_effort = "high"
 # UI / 历史始终显示中文；朗读台词独立生成。
 language = "ja"
 
+# 可选：按角色 ID 接入语料校验结果；每轮对话读取最新人工确认记录。
+# [speech.reviewed_datasets]
+# chiaki = "/absolute/path/to/dataset.jsonl"
+
 # ASR、TTS HTTP 端点及设备配置在同目录 voice.json。
 # 桌面授权、常驻开关、时段和排除项由桌面面板管理，保存至 PostgreSQL。

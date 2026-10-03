@@ -26,4 +26,5 @@ export type SpeechReference = Readonly<{
   refAudioPath: string;
   promptText: string;
   promptLanguage: string;
+  sourceSha256?: string;
 }>;

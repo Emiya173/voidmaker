@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { SpeechReference } from "../../contracts/src/speech.js";
 import { speechModelSchema, type VoiceConfig } from "../../contracts/src/voice.js";
 import { readWav } from "./pcm.js";
+import { readReviewedAudio } from "./reviewed-speech.js";
 
 async function body(response: Response, maxBytes: number): Promise<Buffer> {
   if (!response.ok) {
@@ -81,6 +82,10 @@ export async function synthesize(
 ): Promise<Buffer> {
   signal.throwIfAborted();
   const prompt = reference ?? config;
+  if (reference?.sourceSha256) {
+    const { duration } = readWav(await readReviewedAudio(reference.refAudioPath, reference.sourceSha256, signal));
+    if (duration < 3 || duration > 10) throw new Error("复核参考音频须为 3–10 秒");
+  }
   const payload = {
     ...(config.model ? { model: config.model } : {}),
     text,

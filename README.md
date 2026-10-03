@@ -154,3 +154,6 @@ pnpm voice:review --dataset /path/to/dataset.jsonl
 服务只监听回环地址，不连接推理服务，也不自动播放或开启麦克风。
 同一数据集只允许一个写入进程；异常退出遗留 `review-state.lock` 时，先确认记录的进程已结束再移除锁文件。
 浏览器回归可用 `VOIDMAKER_REVIEW_BROWSER=1 pnpm test tests/voice-review-browser.test.ts`，需要 Chromium。
+
+在 `config.toml` 的 `[speech.reviewed_datasets]` 中按角色 ID 配置数据集绝对路径后，已确认且未排除的日文素材可用于 TTS 参考。
+仅使用校验通过的 3–10 秒音频与人工核对台词；按情绪和说话方式分组，对话模型逐段选择。后续确认或排除从下一轮生效，当前轮次保留已选参考。服务诊断可查看可用条数与语气数量。

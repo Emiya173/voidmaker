@@ -12,6 +12,41 @@ import {
 import { boundedFile } from "./character-assets.js";
 
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+
+/** Read an atomically saved review snapshot without taking the editor's writer lock. */
+export async function readVoiceReview(dataset: string) {
+  const path = await realpath(dataset);
+  const source = await boundedFile(path, 32 * 1024 * 1024);
+  const fingerprint = hash(source);
+  const samples = source
+    .toString("utf8")
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => reviewSample.parse(JSON.parse(line)));
+  if (!samples.length || new Set(samples.map((s) => s.id)).size !== samples.length)
+    throw new Error("数据集为空或存在重复编号");
+  if (samples.some((s) => !isAbsolute(s.audio))) throw new Error("音频路径须为绝对路径");
+  let changes: ReviewChange[] = [];
+  try {
+    const state = reviewState.parse(
+      JSON.parse((await boundedFile(join(dirname(path), "review-state.json"), 64 * 1024 * 1024)).toString("utf8")),
+    );
+    if (state.dataset_sha256 !== fingerprint) throw new Error("原始数据集已变更，不能将旧修正套用到不同数据");
+    changes = state.changes;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const ids = new Set(samples.map((s) => s.id));
+  const latest = new Map<string, ReviewChange>();
+  for (const change of changes) {
+    if (!ids.has(change.id) || change.revision !== (latest.get(change.id)?.revision ?? 0) + 1)
+      throw new Error("校验记录编号或版本不一致");
+    reviewSave.parse({ revision: change.revision - 1, fields: change.fields });
+    latest.set(change.id, change);
+  }
+  return { fingerprint, samples, changes, latest };
+}
+
 export async function openVoiceReview(dataset: string) {
   const path = await realpath(dataset);
   const root = dirname(path);
@@ -25,32 +60,10 @@ export async function openVoiceReview(dataset: string) {
   let closed = false;
   let queue: Promise<unknown> = Promise.resolve();
   try {
-    const source = await boundedFile(path, 32 * 1024 * 1024);
-    const fingerprint = hash(source);
-    const samples = source
-      .toString("utf8")
-      .split("\n")
-      .filter((line) => line.trim())
-      .map((line) => reviewSample.parse(JSON.parse(line)));
-    if (!samples.length || new Set(samples.map((s) => s.id)).size !== samples.length)
-      throw new Error("数据集为空或存在重复编号");
-    if (samples.some((s) => !isAbsolute(s.audio))) throw new Error("音频路径须为绝对路径");
+    const loaded = await readVoiceReview(path);
+    const { fingerprint, samples, latest } = loaded;
     const originals = new Map(samples.map((sample) => [sample.id, sample]));
-    let changes: ReviewChange[] = [];
-    try {
-      const state = reviewState.parse(JSON.parse((await boundedFile(statePath, 64 * 1024 * 1024)).toString("utf8")));
-      if (state.dataset_sha256 !== fingerprint) throw new Error("原始数据集已变更，不能将旧修正套用到不同数据");
-      changes = state.changes;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    const latest = new Map<string, ReviewChange>();
-    for (const change of changes) {
-      if (!originals.has(change.id) || change.revision !== (latest.get(change.id)?.revision ?? 0) + 1)
-        throw new Error("校验记录编号或版本不一致");
-      reviewSave.parse({ revision: change.revision - 1, fields: change.fields });
-      latest.set(change.id, change);
-    }
+    let changes = loaded.changes;
     const row = (id: string): ReviewRow => {
       const original = originals.get(id);
       if (!original) throw new Error("素材不存在");
