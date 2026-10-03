@@ -20,11 +20,13 @@ export type SpeechSegment = Readonly<{
 }>;
 export type WaitingClip = Readonly<{ wav: Buffer; subtitle: string }>;
 export type ReplyClip = WaitingClip & Readonly<{ id: string; description: string; text: string }>;
-export type SpeechReference = Readonly<{
-  id: string;
-  description: string;
-  refAudioPath: string;
-  promptText: string;
-  promptLanguage: string;
-  sourceSha256?: string;
-}>;
+export type SpeechReference = Readonly<
+  {
+    id: string;
+    description: string;
+    refAudioPath: string;
+  } & (
+    | { kind?: "primary"; promptText: string; promptLanguage: string; sourceSha256?: string }
+    | { kind: "auxiliary"; sourceSha256: string; portraitId?: string }
+  )
+>;

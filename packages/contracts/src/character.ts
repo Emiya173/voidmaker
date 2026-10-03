@@ -255,6 +255,23 @@ export const characterDefinition = z
         textLanguage: z.string().min(1).max(32).default("auto"),
         url: localUrl.optional(),
         model: z.object({ gptWeightsPath: asset, sovitsWeightsPath: asset }).strict().optional(),
+        referenceMode: z.enum(["primary", "auxiliary"]).optional(),
+        auxiliaryReferences: z
+          .array(
+            z
+              .object({
+                id: z.string().regex(/^[a-z0-9_-]{1,40}$/),
+                description: z.string().trim().min(1).max(300),
+                reference: asset,
+                portraitId: z
+                  .string()
+                  .regex(/^[a-z0-9_-]{1,40}$/)
+                  .optional(),
+              })
+              .strict(),
+          )
+          .max(24)
+          .optional(),
         waitingClips: z
           .array(z.object({ audio: asset, subtitle: z.string().trim().min(1).max(80) }).strict())
           .max(8)
@@ -289,6 +306,10 @@ export const characterDefinition = z
           .optional(),
       })
       .strict()
+      .refine(
+        (voice) => !voice.auxiliaryReferences || voice.referenceMode === "auxiliary",
+        "辅参考音频须启用 auxiliary 参考模式",
+      )
       .optional(),
   })
   .strict();

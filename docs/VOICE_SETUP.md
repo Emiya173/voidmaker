@@ -92,6 +92,17 @@ Host 切换角色时预加载；首次启动保留独立文字交互能力，不
 语气由上下文和台词意图选择，不改变服务端权重。参考音频须符合 GPT-SoVITS 的时长约束，
 没有合适参考时使用默认音色；实际语气与自然度需听音验收。
 
+GPT-SoVITS v2ProPlus 角色可设置 `voice.referenceMode: "auxiliary"`，固定使用
+`voice.reference`、`promptText`、`promptLanguage` 作为主参考；`voice.auxiliaryReferences` 提供
+`{ "id": "gentle", "description": "温柔关心", "reference": "voice/gentle.wav", "portraitId": "gentle" }`。
+辅参考不要求台词，`portraitId` 可选，须指向包内已加载的立绘或 `neutral`；设置后语气与对应立绘同步。
+每段最多选择一个辅参考，通过 `aux_ref_audio_paths` 传入；选默认语气时发送空数组，清除上一段辅参考。
+应用接受 0.2–10 秒 PCM 16-bit 辅参考，并在加载及合成前校验音频和 SHA-256。
+该模式下原有静态参考和人工复核参考也用作辅参考，不会替换固定主参考。
+主参考仍需满足模型的 3–10 秒约束。v2ProPlus 将主辅参考的声学条件等权融合；
+按情绪选择有助于控制语气，但并非独立的情绪强度控制，听感需实际验收。
+这与 `waitingClips` / `replyClips` 的直接播放用途独立，导入辅参考不会自动新增句首回应。
+
 浏览器校验的干音可作为动态参考库。在仓库外 `config.toml` 中按角色 ID 配置：
 
 ```toml
@@ -100,7 +111,7 @@ chiaki = "/absolute/path/to/dataset.jsonl"
 ```
 
 首次配置后重启应用。每轮对话开始时读取数据集旁的 `review-state.json`，仅纳入人工确认、
-未排除且不再标记待复核的素材；日文台词应与原音逐字一致。原音须为 3–10 秒 PCM 16-bit WAV，
+未排除且不再标记待复核的素材；日文台词应与原音逐字一致。主参考模式的原音须为 3–10 秒 PCM 16-bit WAV；辅参考模式为 0.2–10 秒，
 并通过原始 SHA-256 校验。台词为空、情绪或说话方式“难以判断”的素材暂不参与。
 该时长要求独立于 ASR 批处理的 2 秒过滤条件，不裁切或拼接短音来凑时长。
 

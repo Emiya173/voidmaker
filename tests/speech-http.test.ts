@@ -1,4 +1,8 @@
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { wavFromPcm } from "../packages/adapters/src/pcm.js";
 import { prepareSynthesis, synthesize, transcribe } from "../packages/adapters/src/speech-http.js";
@@ -10,7 +14,21 @@ function required<T>(value: T | undefined): T {
 }
 
 const servers: Server[] = [];
+const paths: string[] = [];
 const wav = wavFromPcm(Buffer.alloc(3200));
+async function auxiliaryReference(audio = wavFromPcm(Buffer.alloc(19_840))) {
+  const directory = await mkdtemp(join(tmpdir(), "voidmaker-auxiliary-http-"));
+  paths.push(directory);
+  const refAudioPath = join(directory, "auxiliary.wav");
+  await writeFile(refAudioPath, audio);
+  return {
+    kind: "auxiliary" as const,
+    id: "curious",
+    description: "好奇",
+    refAudioPath,
+    sourceSha256: createHash("sha256").update(audio).digest("hex"),
+  };
+}
 async function server(handler: Parameters<typeof createServer>[0]) {
   const instance = createServer(handler);
   servers.push(instance);
@@ -29,6 +47,7 @@ afterEach(async () => {
         }),
     ),
   );
+  await Promise.all(paths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
 it("preloads a complete model pair and includes it in every synthesis, even after a service restart", async () => {
@@ -125,6 +144,7 @@ it("validates GPT-SoVITS request and WAV response", async () => {
     media_type: "wav",
     text: "你好",
     ref_audio_path: "/model/ref.wav",
+    aux_ref_audio_paths: [],
     text_split_method: "cut1",
     batch_size: 1,
     top_k: 15,
@@ -187,9 +207,111 @@ it("uses the selected tone reference without changing character weights", async 
     prompt_text: "大丈夫",
     prompt_lang: "ja",
     model: config.model,
+    aux_ref_audio_paths: [],
   });
   await synthesize("こんにちは。", config, new AbortController().signal);
-  expect(payload).toMatchObject({ ref_audio_path: "/speaker.wav", prompt_text: "参考", model: config.model });
+  expect(payload).toMatchObject({
+    ref_audio_path: "/speaker.wav",
+    prompt_text: "参考",
+    model: config.model,
+    aux_ref_audio_paths: [],
+  });
+});
+
+it("accepts short auxiliary audio while keeping the main reference and resets auxiliary state on the next default turn", async () => {
+  const payloads: Record<string, unknown>[] = [];
+  const url = await server(async (req, res) => {
+    let data = "";
+    for await (const chunk of req) data += chunk;
+    payloads.push(JSON.parse(data));
+    res.end(wav);
+  });
+  const config = required(
+    voiceConfigSchema.parse({
+      tts: {
+        url,
+        refAudioPath: "/fixed/ref.wav",
+        promptText: "でも、怪しい人の手がかりならある。",
+        promptLanguage: "ja",
+        textLanguage: "ja",
+        model: { gptWeightsPath: "/character.ckpt", sovitsWeightsPath: "/character.pth" },
+      },
+    }).tts,
+  );
+  const reference = await auxiliaryReference();
+  expect(await synthesize("何があったの？", config, new AbortController().signal, reference)).toEqual(wav);
+  await synthesize("一緒に確認しよう。", config, new AbortController().signal);
+  expect(payloads).toHaveLength(2);
+  for (const payload of payloads)
+    expect(payload).toMatchObject({
+      ref_audio_path: config.refAudioPath,
+      prompt_text: config.promptText,
+      prompt_lang: config.promptLanguage,
+      model: config.model,
+    });
+  expect(payloads[0]?.aux_ref_audio_paths).toEqual([reference.refAudioPath]);
+  expect(payloads[1]?.aux_ref_audio_paths).toEqual([]);
+});
+
+it("rejects missing, changed, malformed or out-of-range auxiliary audio before sending an inference request", async () => {
+  let requests = 0;
+  const url = await server((_req, res) => {
+    requests++;
+    res.end(wav);
+  });
+  const config = required(
+    voiceConfigSchema.parse({ tts: { url, refAudioPath: "/fixed/ref.wav", promptText: "固定参考" } }).tts,
+  );
+  const missing = await auxiliaryReference();
+  await rm(missing.refAudioPath);
+  await expect(synthesize("試そう。", config, new AbortController().signal, missing)).rejects.toThrow("ENOENT");
+  const changed = await auxiliaryReference();
+  await writeFile(changed.refAudioPath, wavFromPcm(Buffer.alloc(32_000)));
+  await expect(synthesize("試そう。", config, new AbortController().signal, changed)).rejects.toThrow("已变更");
+  const malformed = await auxiliaryReference(Buffer.from("not audio"));
+  await expect(synthesize("試そう。", config, new AbortController().signal, malformed)).rejects.toThrow("WAV");
+  for (const duration of [0.19, 10.01]) {
+    const invalid = await auxiliaryReference(wavFromPcm(Buffer.alloc(Math.round(duration * 32_000))));
+    await expect(synthesize("試そう。", config, new AbortController().signal, invalid)).rejects.toThrow("0.2–10");
+  }
+  const short = await auxiliaryReference();
+  const primary = { ...short, kind: "primary" as const, promptText: "短い参考。", promptLanguage: "ja" };
+  await expect(synthesize("試そう。", config, new AbortController().signal, primary)).rejects.toThrow("3–10");
+  expect(requests).toBe(0);
+});
+
+it("cancels auxiliary reference preparation and rejects a late synthesis response after abort", async () => {
+  let requests = 0;
+  let complete: (() => void) | undefined;
+  let started!: () => void;
+  const received = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const url = await server(async (req, res) => {
+    for await (const _chunk of req) {
+      /* consume the request before holding the response */
+    }
+    requests++;
+    complete = () => res.end(wav);
+    started();
+  });
+  const config = required(
+    voiceConfigSchema.parse({ tts: { url, refAudioPath: "/fixed/ref.wav", promptText: "固定参考" } }).tts,
+  );
+  const reference = await auxiliaryReference();
+  const early = new AbortController();
+  const preparing = synthesize("試そう。", config, early.signal, reference);
+  early.abort();
+  await expect(preparing).rejects.toThrow();
+  expect(requests).toBe(0);
+  const controller = new AbortController();
+  const pending = synthesize("試そう。", config, controller.signal, reference);
+  const rejected = expect(pending).rejects.toThrow();
+  await received;
+  controller.abort();
+  complete?.();
+  await rejected;
+  expect(requests).toBe(1);
 });
 
 it("rejects incomplete weight pairs, cancels stalled synthesis and rejects broken audio", async () => {

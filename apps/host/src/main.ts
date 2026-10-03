@@ -609,8 +609,13 @@ class Host {
           id: "reviewed-speech",
           label: "人工复核语音参考",
           run: async (signal) =>
-            (await loadReviewedSpeech(this.config.speech.reviewed_datasets[this.character.current.id], signal))
-              .diagnostic,
+            (
+              await loadReviewedSpeech(
+                this.config.speech.reviewed_datasets[this.character.current.id],
+                signal,
+                this.character.current.referenceMode,
+              )
+            ).diagnostic,
         },
         { id: "aec", label: "AEC 插件", run: () => inspectAec(config) },
         {
@@ -779,7 +784,7 @@ class Host {
     this.broadcast({ type: "status", status: "thinking" });
     try {
       const dataset = this.config.speech.reviewed_datasets[character.id];
-      const reviewed = await loadReviewedSpeech(dataset, preparation.signal);
+      const reviewed = await loadReviewedSpeech(dataset, preparation.signal, character.referenceMode);
       const reviewedIds = new Set(reviewed.references.map((reference) => reference.id));
       const references = [
         ...reviewed.references,

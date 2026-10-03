@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,161 @@ import { characterPresentation } from "../packages/domain/src/character.js";
 import { initialVoice, voiceTransition } from "../packages/domain/src/voice.js";
 
 const paths: string[] = [];
+it("requires an explicit auxiliary mode without adding defaults to existing character definitions", () => {
+  const definition = {
+    version: 1,
+    id: "demo",
+    name: "Demo",
+    persona: "测试",
+    voice: { reference: "ref.wav", promptText: "参考" },
+  };
+  expect(characterDefinition.parse(definition).voice).toEqual({
+    ...definition.voice,
+    promptLanguage: "zh",
+    textLanguage: "auto",
+  });
+  const reference = { id: "gentle", description: "温柔", reference: "short.wav" };
+  const withAuxiliary = (referenceMode?: string, auxiliaryReferences = [reference]) => ({
+    ...definition,
+    voice: { ...definition.voice, referenceMode, auxiliaryReferences },
+  });
+  expect(characterDefinition.safeParse(withAuxiliary()).success).toBe(false);
+  expect(characterDefinition.safeParse(withAuxiliary("primary")).success).toBe(false);
+  expect(characterDefinition.safeParse(withAuxiliary("auxiliary")).success).toBe(true);
+  expect(
+    characterDefinition.safeParse(withAuxiliary("auxiliary", [{ ...reference, reference: "../outside.wav" }])).success,
+  ).toBe(false);
+  expect(characterDefinition.safeParse(withAuxiliary("auxiliary", Array(25).fill(reference))).success).toBe(false);
+});
+
+it("pins short auxiliary audio and its portrait while retaining the fixed primary reference and legacy mode", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "voidmaker-auxiliary-"));
+  paths.push(directory);
+  const root = join(directory, "demo");
+  await mkdir(root);
+  const short = wavFromPcm(Buffer.alloc(32_000 * 0.62));
+  await writeFile(join(root, "short.wav"), short);
+  await writeFile(join(root, "ref.wav"), wavFromPcm(Buffer.alloc(32_000 * 4)));
+  await writeFile(
+    join(root, "gentle.png"),
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  );
+  const definition = {
+    version: 1,
+    id: "demo",
+    name: "Demo",
+    persona: "测试",
+    portraitExpressions: [{ id: "gentle", description: "温柔", image: "gentle.png" }],
+    voice: {
+      reference: "ref.wav",
+      promptText: "固定主参考台词",
+      promptLanguage: "ja",
+      textLanguage: "ja",
+      references: [{ id: "legacy", description: "原有参考", reference: "short.wav", promptText: "旧台词" }],
+    },
+  };
+  await writeFile(
+    join(root, "character.json"),
+    JSON.stringify({
+      ...definition,
+      voice: {
+        ...definition.voice,
+        referenceMode: "auxiliary",
+        auxiliaryReferences: [
+          { id: "gentle", description: "温柔", reference: "short.wav", portraitId: "gentle" },
+          { id: "calm", description: "平静", reference: "short.wav", portraitId: "neutral" },
+        ],
+      },
+    }),
+  );
+  let catalog = await loadCharacters(directory);
+  expect(catalog.warnings).toEqual([]);
+  const reference = {
+    refAudioPath: join(root, "short.wav"),
+    kind: "auxiliary",
+    sourceSha256: createHash("sha256").update(short).digest("hex"),
+  };
+  expect(catalog.entries[1]?.speechReferences).toEqual([
+    { ...reference, id: "legacy", description: "原有参考" },
+    { ...reference, id: "gentle", description: "温柔", portraitId: "gentle" },
+    { ...reference, id: "calm", description: "平静", portraitId: "neutral" },
+  ]);
+  expect(catalog.entries[1]?.referenceMode).toBe("auxiliary");
+  expect(catalog.entries[1]?.voice).toEqual({
+    refAudioPath: join(root, "ref.wav"),
+    promptText: "固定主参考台词",
+    promptLanguage: "ja",
+    textLanguage: "ja",
+  });
+  expect(catalog.entries[1]?.replyClips).toBeUndefined();
+  expect(catalog.entries[1]?.waitingClips).toBeUndefined();
+  await writeFile(join(root, "character.json"), JSON.stringify(definition));
+  catalog = await loadCharacters(directory);
+  expect(catalog.entries[1]?.referenceMode).toBeUndefined();
+  expect(catalog.entries[1]?.speechReferences).toEqual([
+    {
+      id: "legacy",
+      description: "原有参考",
+      refAudioPath: join(root, "short.wav"),
+      promptText: "旧台词",
+      promptLanguage: "ja",
+    },
+  ]);
+});
+
+it("skips invalid, escaping and duplicate auxiliary audio and drops only broken portrait bindings", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "voidmaker-auxiliary-invalid-"));
+  paths.push(directory);
+  const root = join(directory, "demo");
+  await mkdir(root);
+  const wav = wavFromPcm(Buffer.alloc(32_000));
+  await writeFile(join(root, "short.wav"), wav);
+  await writeFile(join(root, "bad.wav"), "invalid");
+  await writeFile(join(root, "tiny.wav"), wavFromPcm(Buffer.alloc(3_200)));
+  await writeFile(join(root, "long.wav"), wavFromPcm(Buffer.alloc(32_000 * 11)));
+  await writeFile(join(directory, "outside.wav"), wav);
+  await symlink(join(directory, "outside.wav"), join(root, "escape.wav"));
+  const reference = { id: "calm", description: "平静", reference: "short.wav" };
+  await writeFile(
+    join(root, "character.json"),
+    JSON.stringify({
+      version: 1,
+      id: "demo",
+      name: "Demo",
+      persona: "测试",
+      portraitExpressions: [{ id: "broken", description: "失效立绘", image: "missing.png" }],
+      voice: {
+        reference: "short.wav",
+        promptText: "主参考",
+        referenceMode: "auxiliary",
+        references: [{ ...reference, promptText: "旧台词" }],
+        auxiliaryReferences: [
+          reference,
+          { ...reference, id: "neutral" },
+          ...["bad", "tiny", "long", "escape", "missing"].map((id) => ({ ...reference, id, reference: `${id}.wav` })),
+          { ...reference, id: "bad_binding", portraitId: "invented" },
+          { ...reference, id: "broken_binding", portraitId: "broken" },
+        ],
+      },
+    }),
+  );
+  const catalog = await loadCharacters(directory);
+  expect(catalog.entries[1]?.speechReferences).toEqual(
+    ["calm", "bad_binding", "broken_binding"].map((id) => ({
+      id,
+      description: "平静",
+      refAudioPath: join(root, "short.wav"),
+      kind: "auxiliary",
+      sourceSha256: createHash("sha256").update(wav).digest("hex"),
+    })),
+  );
+  expect(catalog.warnings).toHaveLength(10);
+  expect(catalog.entries[1]?.voice?.refAudioPath).toBe(join(root, "short.wav"));
+});
+
 it("offers only valid local reply clips to the model and skips duplicate, reserved or broken clips", async () => {
   const directory = await mkdtemp(join(tmpdir(), "voidmaker-openers-"));
   paths.push(directory);

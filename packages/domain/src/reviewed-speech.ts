@@ -1,11 +1,15 @@
 import type { SpeechReference } from "../../contracts/src/speech.js";
 import { type ReviewFields, reviewOptions } from "../../contracts/src/voice-review.js";
 
-export type ReviewedSpeechCandidate = SpeechReference &
+type ReviewedPrimaryReference = Extract<SpeechReference, { promptText: string }> & Readonly<{ sourceSha256: string }>;
+
+export type ReviewedSpeechCandidate = ReviewedPrimaryReference &
   Readonly<Pick<ReviewFields, "emotion" | "delivery"> & { sampleId: string; duration: number }>;
 
 /** Represent each reviewed style once; a stable, roughly five-second reference avoids prompt bloat. */
-export function reviewedSpeechStyles(candidates: readonly ReviewedSpeechCandidate[]): readonly SpeechReference[] {
+export function reviewedSpeechStyles(
+  candidates: readonly ReviewedSpeechCandidate[],
+): readonly ReviewedPrimaryReference[] {
   const groups = new Map<string, ReviewedSpeechCandidate>();
   for (const candidate of candidates) {
     const id = `reviewed_e${reviewOptions.emotion.indexOf(candidate.emotion)}_d${reviewOptions.delivery.indexOf(candidate.delivery)}`;
@@ -26,6 +30,6 @@ export function reviewedSpeechStyles(candidates: readonly ReviewedSpeechCandidat
       refAudioPath: candidate.refAudioPath,
       promptText: candidate.promptText,
       promptLanguage: candidate.promptLanguage,
-      ...(candidate.sourceSha256 ? { sourceSha256: candidate.sourceSha256 } : {}),
+      sourceSha256: candidate.sourceSha256,
     }));
 }

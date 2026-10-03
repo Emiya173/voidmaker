@@ -28,7 +28,7 @@ const fields: ReviewFields = {
   excluded: false,
   review_note: "",
 };
-async function fixture() {
+async function fixture(extraSpecs: [string, number][] = []) {
   const root = await mkdtemp(join(tmpdir(), "voidmaker-reviewed-speech-"));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
   const specs: [string, number][] = [
@@ -40,6 +40,7 @@ async function fixture() {
     ["excluded", 4],
     ["unconfirmed", 5],
     ["unknown", 5],
+    ...extraSpecs,
   ];
   const rows = await Promise.all(
     specs.map(async ([id, duration]) => {
@@ -102,79 +103,119 @@ it("reads human corrections alongside the editor, filters unsuitable audio and r
   expect((await loadReviewedSpeech(f.path, new AbortController().signal)).references).toHaveLength(0);
 });
 
-it("falls back on a broken review snapshot and rejects a cancelled load", async () => {
-  const f = await fixture();
-  const controller = new AbortController();
-  const pending = loadReviewedSpeech(f.path, controller.signal);
-  controller.abort();
-  await expect(pending).rejects.toThrow();
-  const state = JSON.parse(await readFile(join(f.root, "review-state.json"), "utf8"));
-  await writeFile(join(f.root, "review-state.json"), JSON.stringify({ ...state, dataset_sha256: "wrong" }));
-  expect(await loadReviewedSpeech(f.path, new AbortController().signal)).toMatchObject({
-    references: [],
-    diagnostic: { status: "error" },
-  });
-  expect(await loadReviewedSpeech(undefined, new AbortController().signal)).toMatchObject({
-    references: [],
-    diagnostic: { status: "unconfigured" },
-  });
+it("uses confirmed short clips only as auxiliary references, retaining hashes and duration limits", async () => {
+  const f = await fixture([
+    ["tiny", 0.19],
+    ["minimum", 0.2],
+    ["maximum", 10],
+  ]);
+  await f.store.save("short", { revision: 1, fields: { ...fields, emotion: "惊讶" } });
+  await f.store.save("minimum", { revision: 1, fields: { ...fields, emotion: "坚定" } });
+  await f.store.save("maximum", { revision: 1, fields: { ...fields, emotion: "担忧" } });
+  const bank = await loadReviewedSpeech(f.path, new AbortController().signal, "auxiliary");
+  expect(bank).toMatchObject({ confirmed: 9, usable: 6, diagnostic: { status: "ready" } });
+  expect(bank.references).toHaveLength(5);
+  expect(bank.diagnostic.detail).toContain("辅参考（0.2–10 秒）");
+  for (const ref of bank.references) {
+    expect(ref.kind).toBe("auxiliary");
+    expect(ref.sourceSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(ref).not.toHaveProperty("promptText");
+    expect(ref).not.toHaveProperty("promptLanguage");
+  }
+  for (const id of ["short", "minimum", "maximum"])
+    expect(bank.references.some((r) => r.refAudioPath.endsWith(`/${id}.wav`))).toBe(true);
+  const primary = await loadReviewedSpeech(f.path, new AbortController().signal);
+  expect(primary.usable).toBe(4);
+  expect(primary.diagnostic.detail).toContain("主参考（3–10 秒）");
+  expect(primary.references.some((r) => r.refAudioPath.endsWith("/short.wav"))).toBe(false);
+  expect(primary.references.some((r) => r.refAudioPath.endsWith("/minimum.wav"))).toBe(false);
+  await writeFile(join(f.root, "short.wav"), Buffer.from("modified"));
+  expect((await loadReviewedSpeech(f.path, new AbortController().signal, "auxiliary")).usable).toBe(5);
 });
 
-it("sends the human-corrected transcript and reference to TTS and rejects audio modified after selection", async () => {
-  const f = await fixture();
-  const bank = await loadReviewedSpeech(f.path, new AbortController().signal);
-  const reference = bank.references[0];
-  if (!reference) throw new Error("Missing reference");
-  const output = wavFromPcm(Buffer.alloc(3200));
-  const fetch = vi.fn(async () => new Response(new Uint8Array(output)));
-  vi.stubGlobal("fetch", fetch);
-  const config = voiceConfigSchema.parse({
-    tts: { url: "http://127.0.0.1:9880/tts", refAudioPath: "/old.wav", promptText: "old", textLanguage: "ja" },
-  }).tts;
-  if (!config) throw new Error("Missing TTS config");
-  expect(await synthesize("一緒に進めよう。", config, new AbortController().signal, reference)).toEqual(output);
-  expect(JSON.parse(fetch.mock.calls[0]?.[1]?.body as string)).toMatchObject({
-    ref_audio_path: reference.refAudioPath,
-    prompt_text: fields.text_ja,
-    prompt_lang: "ja",
-    text_lang: "ja",
-  });
-  await writeFile(reference.refAudioPath, Buffer.from("modified"));
-  await expect(synthesize("次。", config, new AbortController().signal, reference)).rejects.toThrow("已变更");
-  expect(fetch).toHaveBeenCalledOnce();
-});
+it.each(["primary", "auxiliary"] as const)(
+  "falls back on a broken %s review snapshot and rejects a cancelled load",
+  async (mode) => {
+    const f = await fixture();
+    const controller = new AbortController();
+    const pending = loadReviewedSpeech(f.path, controller.signal, mode);
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+    const state = JSON.parse(await readFile(join(f.root, "review-state.json"), "utf8"));
+    await writeFile(join(f.root, "review-state.json"), JSON.stringify({ ...state, dataset_sha256: "wrong" }));
+    expect(await loadReviewedSpeech(f.path, new AbortController().signal, mode)).toMatchObject({
+      references: [],
+      diagnostic: { status: "error" },
+    });
+    expect(await loadReviewedSpeech(undefined, new AbortController().signal, mode)).toMatchObject({
+      references: [],
+      diagnostic: { status: "unconfigured" },
+    });
+  },
+);
 
-it("pins reference metadata to the speech turn and cancels an in-flight reviewed synthesis", async () => {
-  const f = await fixture();
-  const first = await loadReviewedSpeech(f.path, new AbortController().signal);
-  const ref = first.references[0];
-  if (!ref) throw new Error("Missing reference");
-  let resolve!: (wav: Buffer) => void;
-  const ports: VoicePorts = {
-    capture: vi.fn(),
-    transcribe: vi.fn(),
-    submit: vi.fn(),
-    publish: vi.fn(),
-    play: vi.fn(async () => {}),
-    synthesize: vi.fn(
-      () =>
-        new Promise((done) => {
-          resolve = done;
-        }),
-    ),
-  };
-  const voice = new VoiceController(ports, false, true);
-  const turn = voice.speak(
-    [{ subtitle: "一起。", text: "一緒に。", referenceId: ref.id }],
-    voice.beginReply(),
-    first.references,
-  );
-  await vi.waitFor(() => expect(ports.synthesize).toHaveBeenCalledOnce());
-  expect(vi.mocked(ports.synthesize).mock.calls[0]?.[3]).toEqual(ref);
-  const stopped = voice.cancel();
-  expect(vi.mocked(ports.synthesize).mock.calls[0]?.[1].aborted).toBe(true);
-  resolve(wavFromPcm(Buffer.alloc(3200)));
-  await Promise.all([turn, stopped]);
-  expect(ports.play).not.toHaveBeenCalled();
-  expect(voice.snapshot.phase).toBe("idle");
-});
+it.each(["primary", "auxiliary"] as const)(
+  "sends a reviewed %s reference to TTS and rejects audio modified after selection",
+  async (mode) => {
+    const f = await fixture();
+    const bank = await loadReviewedSpeech(f.path, new AbortController().signal, mode);
+    const reference = bank.references[0];
+    if (!reference) throw new Error("Missing reference");
+    const output = wavFromPcm(Buffer.alloc(3200));
+    const fetch = vi.fn(async () => new Response(new Uint8Array(output)));
+    vi.stubGlobal("fetch", fetch);
+    const config = voiceConfigSchema.parse({
+      tts: { url: "http://127.0.0.1:9880/tts", refAudioPath: "/old.wav", promptText: "old", textLanguage: "ja" },
+    }).tts;
+    if (!config) throw new Error("Missing TTS config");
+    expect(await synthesize("一緒に進めよう。", config, new AbortController().signal, reference)).toEqual(output);
+    expect(JSON.parse(fetch.mock.calls[0]?.[1]?.body as string)).toMatchObject({
+      ref_audio_path: mode === "auxiliary" ? config.refAudioPath : reference.refAudioPath,
+      prompt_text: mode === "auxiliary" ? config.promptText : fields.text_ja,
+      prompt_lang: mode === "auxiliary" ? config.promptLanguage : "ja",
+      text_lang: "ja",
+      aux_ref_audio_paths: mode === "auxiliary" ? [reference.refAudioPath] : [],
+    });
+    await writeFile(reference.refAudioPath, Buffer.from("modified"));
+    await expect(synthesize("次。", config, new AbortController().signal, reference)).rejects.toThrow("已变更");
+    expect(fetch).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["primary", "auxiliary"] as const)(
+  "pins %s reference metadata to the speech turn and cancels an in-flight reviewed synthesis",
+  async (mode) => {
+    const f = await fixture();
+    const first = await loadReviewedSpeech(f.path, new AbortController().signal, mode);
+    const ref = first.references[0];
+    if (!ref) throw new Error("Missing reference");
+    let resolve!: (wav: Buffer) => void;
+    const ports: VoicePorts = {
+      capture: vi.fn(),
+      transcribe: vi.fn(),
+      submit: vi.fn(),
+      publish: vi.fn(),
+      play: vi.fn(async () => {}),
+      synthesize: vi.fn(
+        () =>
+          new Promise((done) => {
+            resolve = done;
+          }),
+      ),
+    };
+    const voice = new VoiceController(ports, false, true);
+    const turn = voice.speak(
+      [{ subtitle: "一起。", text: "一緒に。", referenceId: ref.id }],
+      voice.beginReply(),
+      first.references,
+    );
+    await vi.waitFor(() => expect(ports.synthesize).toHaveBeenCalledOnce());
+    expect(vi.mocked(ports.synthesize).mock.calls[0]?.[3]).toEqual(ref);
+    const stopped = voice.cancel();
+    expect(vi.mocked(ports.synthesize).mock.calls[0]?.[1].aborted).toBe(true);
+    resolve(wavFromPcm(Buffer.alloc(3200)));
+    await Promise.all([turn, stopped]);
+    expect(ports.play).not.toHaveBeenCalled();
+    expect(voice.snapshot.phase).toBe("idle");
+  },
+);

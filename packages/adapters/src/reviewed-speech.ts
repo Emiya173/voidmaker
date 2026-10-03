@@ -28,8 +28,11 @@ export async function readReviewedAudio(path: string, sha256: string, signal: Ab
 export async function loadReviewedSpeech(
   dataset: string | undefined,
   signal: AbortSignal,
+  mode: "primary" | "auxiliary" = "primary",
 ): Promise<ReviewedSpeechBank> {
   const diagnostic = { id: "reviewed-speech", label: "人工复核语音参考" };
+  const minimumDuration = mode === "auxiliary" ? 0.2 : 3;
+  const usage = mode === "auxiliary" ? "辅参考（0.2–10 秒）" : "主参考（3–10 秒）";
   if (!dataset)
     return {
       references: [],
@@ -60,7 +63,7 @@ export async function loadReviewedSpeech(
       try {
         const wav = await readReviewedAudio(original.audio, original.source_sha256, signal);
         const { duration } = readWav(wav);
-        if (duration < 3 || duration > 10) continue;
+        if (duration < minimumDuration || duration > 10) continue;
         candidates.push({
           id: original.id,
           sampleId: original.id,
@@ -78,7 +81,17 @@ export async function loadReviewedSpeech(
         // A bad sample must not make the remaining reviewed styles unusable.
       }
     }
-    const references = reviewedSpeechStyles(candidates);
+    const styles = reviewedSpeechStyles(candidates);
+    const references: readonly SpeechReference[] =
+      mode === "auxiliary"
+        ? styles.map(({ id, description, refAudioPath, sourceSha256 }) => ({
+            kind: "auxiliary",
+            id,
+            description,
+            refAudioPath,
+            sourceSha256,
+          }))
+        : styles;
     return {
       references,
       confirmed,
@@ -86,7 +99,7 @@ export async function loadReviewedSpeech(
       diagnostic: {
         ...diagnostic,
         status: references.length ? "ready" : "reachable",
-        detail: `已确认 ${confirmed} 条，可用 ${candidates.length} 条，提供 ${references.length} 种语气；${confirmed - candidates.length} 条因时长、台词、标签或音频校验未纳入。下一轮读取最新确认记录。`,
+        detail: `${usage}：已确认 ${confirmed} 条，可用 ${candidates.length} 条，提供 ${references.length} 种语气；${confirmed - candidates.length} 条因时长、台词、标签或音频校验未纳入。下一轮读取最新确认记录。`,
       },
     };
   } catch (error) {

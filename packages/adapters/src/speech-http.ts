@@ -81,10 +81,12 @@ export async function synthesize(
   reference?: SpeechReference,
 ): Promise<Buffer> {
   signal.throwIfAborted();
-  const prompt = reference ?? config;
+  const prompt = reference?.kind === "auxiliary" ? config : (reference ?? config);
   if (reference?.sourceSha256) {
     const { duration } = readWav(await readReviewedAudio(reference.refAudioPath, reference.sourceSha256, signal));
-    if (duration < 3 || duration > 10) throw new Error("复核参考音频须为 3–10 秒");
+    if (reference.kind === "auxiliary") {
+      if (duration < 0.2 || duration > 10) throw new Error("辅参考音频须为 0.2–10 秒");
+    } else if (duration < 3 || duration > 10) throw new Error("复核参考音频须为 3–10 秒");
   }
   const payload = {
     ...(config.model ? { model: config.model } : {}),
@@ -93,6 +95,7 @@ export async function synthesize(
     ref_audio_path: prompt.refAudioPath,
     prompt_text: prompt.promptText,
     prompt_lang: prompt.promptLanguage,
+    aux_ref_audio_paths: reference?.kind === "auxiliary" ? [reference.refAudioPath] : [],
     text_split_method: "cut1",
     batch_size: 1,
     media_type: "wav",

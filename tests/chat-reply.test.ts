@@ -118,3 +118,48 @@ it("gives the model only the current reference IDs and style labels, keeping sou
   expect(prompt).not.toContain("/ref.wav");
   expect(prompt).not.toContain("参考台词");
 });
+
+it("keeps a selected auxiliary voice and its installed portrait together without exposing recordings", () => {
+  const auxiliary = {
+    kind: "auxiliary" as const,
+    id: "soft",
+    description: "温柔关心",
+    refAudioPath: "/private/soft.wav",
+    sourceSha256: "a".repeat(64),
+    portraitId: "gentle",
+  };
+  const paired = replyFormat([auxiliary], portraits);
+  const raw = JSON.stringify({
+    openingClipId: "none",
+    segments: [{ ...segment, referenceId: "soft", portraitId: "neutral" }],
+  });
+  expect(parseReply(raw, paired)[0]?.portraitId).toBe("gentle");
+  expect(new ReplyStream(paired).push(raw)).toBe(segment.subtitle);
+  expect(speechReferenceInstructions([auxiliary])).toContain('"portraitId":"gentle"');
+  expect(replyInstructions("ja", [auxiliary], portraits)).not.toContain("/private/");
+  expect(speechReferenceInstructions([auxiliary])).not.toContain(auxiliary.sourceSha256);
+  const missingPortrait = replyFormat([{ ...auxiliary, portraitId: "missing" }], portraits);
+  expect(parseReply(raw, missingPortrait)[0]?.portraitId).toBe("neutral");
+  const neutral = JSON.stringify({ openingClipId: "none", segments: [{ ...segment, referenceId: "neutral" }] });
+  expect(parseReply(neutral, paired)[0]?.portraitId).toBe("gentle");
+});
+
+it("does not mistake object prototype names for a bound portrait", () => {
+  for (const id of ["constructor", "__proto__"]) {
+    const unpaired = replyFormat(
+      [
+        {
+          ...references[0],
+          id,
+          description: "平静",
+          refAudioPath: "/ref.wav",
+          promptText: "参考",
+          promptLanguage: "ja",
+        },
+      ],
+      portraits,
+    );
+    const raw = JSON.stringify({ openingClipId: "none", segments: [{ ...segment, referenceId: id }] });
+    expect(parseReply(raw, unpaired)[0]?.portraitId).toBe("gentle");
+  }
+});

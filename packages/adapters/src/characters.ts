@@ -28,6 +28,7 @@ export type Character = Readonly<{
   layered: boolean;
   trayIcon?: PixelIcon;
   avatar?: AvatarPresentation;
+  referenceMode?: "primary" | "auxiliary";
   speechReferences?: readonly SpeechReference[];
   waitingClips?: readonly WaitingClip[];
   replyClips?: readonly ReplyClip[];
@@ -70,6 +71,22 @@ async function portrait(root: string, path: string): Promise<string> {
   if (!width || !height || width > 8192 || height > 8192 || width * height > 24_000_000)
     throw new Error("立绘尺寸过大");
   return pathToFileURL(resolved).href;
+}
+async function auxiliaryReference(
+  root: string,
+  reference: Readonly<{ id: string; description: string; reference: string }>,
+): Promise<Extract<SpeechReference, { kind: "auxiliary" }>> {
+  const refAudioPath = await assetPath(root, reference.reference);
+  const wav = await boundedFile(refAudioPath, 32 * 1024 * 1024);
+  const { duration } = readWav(wav);
+  if (duration < 0.2 || duration > 10) throw new Error("辅参考音频须为 0.2 至 10 秒");
+  return {
+    id: reference.id,
+    description: reference.description,
+    refAudioPath,
+    kind: "auxiliary",
+    sourceSha256: createHash("sha256").update(wav).digest("hex"),
+  };
 }
 export async function loadCharacters(
   directory = process.env.VOIDMAKER_CHARACTERS_DIR ??
@@ -238,6 +255,10 @@ export async function loadCharacters(
           try {
             if (reference.id === "neutral" || speechReferences.some((entry) => entry.id === reference.id))
               throw new Error("参考音频 id 重复");
+            if (definition.voice.referenceMode === "auxiliary") {
+              speechReferences.push(await auxiliaryReference(root, reference));
+              continue;
+            }
             const refAudioPath = await assetPath(root, reference.reference);
             const info = await stat(refAudioPath);
             if (!info.isFile() || info.size > 32 * 1024 * 1024) throw new Error("参考音频无效");
@@ -252,6 +273,21 @@ export async function loadCharacters(
             warnings.push(`${definition.name}：${reference.id} 语气参考不可用，使用默认语气`);
           }
         }
+        for (const reference of definition.voice.auxiliaryReferences ?? []) {
+          try {
+            if (reference.id === "neutral" || speechReferences.some((entry) => entry.id === reference.id))
+              throw new Error("参考音频 id 重复");
+            const audio = await auxiliaryReference(root, reference);
+            const portraitId = reference.portraitId;
+            const validPortrait =
+              portraitId === "neutral" || portraitExpressions.some((expression) => expression.id === portraitId);
+            if (portraitId && !validPortrait)
+              warnings.push(`${definition.name}：${reference.id} 辅参考的立绘绑定不可用，已忽略绑定`);
+            speechReferences.push({ ...audio, ...(portraitId && validPortrait ? { portraitId } : {}) });
+          } catch {
+            warnings.push(`${definition.name}：${reference.id} 辅参考不可用，使用默认语气`);
+          }
+        }
       }
       entries.push({
         id: definition.id,
@@ -264,6 +300,7 @@ export async function loadCharacters(
         ...(portraitExpressions.length ? { portraitExpressions } : {}),
         ...(avatar ? { avatar } : {}),
         ...(voice ? { voice } : {}),
+        ...(definition.voice?.referenceMode ? { referenceMode: definition.voice.referenceMode } : {}),
         ...(speechReferences.length ? { speechReferences } : {}),
         ...(waitingClips.length ? { waitingClips } : {}),
         ...(replyClips.length ? { replyClips } : {}),
